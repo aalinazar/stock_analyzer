@@ -113,8 +113,9 @@ class PortfolioDatabase:
             return deleted
     
     def update_stock(self, stock_id: int, shares: float = None, 
-                    purchase_price: float = None) -> bool:
-        """Update stock shares or purchase price"""
+                    purchase_price: float = None, purchase_date: str = None,
+                    ticker: str = None, company_name: str = None) -> bool:
+        """Update stock details"""
         updates = []
         params = []
         
@@ -125,6 +126,18 @@ class PortfolioDatabase:
         if purchase_price is not None:
             updates.append('purchase_price = ?')
             params.append(purchase_price)
+        
+        if purchase_date is not None:
+            updates.append('purchase_date = ?')
+            params.append(purchase_date)
+        
+        if ticker is not None:
+            updates.append('ticker = ?')
+            params.append(ticker.upper())
+        
+        if company_name is not None:
+            updates.append('company_name = ?')
+            params.append(company_name)
         
         if not updates:
             return False
@@ -203,6 +216,88 @@ class PortfolioDatabase:
                 LIMIT ?
             ''', (limit,))
             return [dict(row) for row in cursor.fetchall()]
+    
+    def sell_stock(self, portfolio_stock_id: int, shares_sold: float, sell_price: float, 
+                   sell_date: str, tax_fee: float = 0.0) -> Tuple[bool, str]:
+        """Sell shares from a stock in portfolio"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # Get the stock details
+            cursor.execute('SELECT * FROM portfolio_stocks WHERE id = ?', (portfolio_stock_id,))
+            stock = cursor.fetchone()
+            
+            if not stock:
+                return False, "Stock not found in portfolio"
+            
+            stock_dict = dict(stock)
+            
+            if shares_sold > stock_dict['shares']:
+                return False, f"Cannot sell {shares_sold} shares. Only {stock_dict['shares']} shares available"
+            
+            # Calculate real profit
+            purchase_cost = shares_sold * stock_dict['purchase_price']
+            sell_revenue = shares_sold * sell_price
+            real_profit = sell_revenue - purchase_cost - tax_fee
+            
+            # Record the sale transaction
+            cursor.execute('''
+                INSERT INTO sales_transactions 
+                (portfolio_stock_id, ticker, shares_sold, sell_price, sell_date, 
+                 purchase_price, tax_fee, real_profit)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (portfolio_stock_id, stock_dict['ticker'], shares_sold, sell_price, 
+                  sell_date, stock_dict['purchase_price'], tax_fee, real_profit))
+            
+            # Update the remaining shares
+            remaining_shares = stock_dict['shares'] - shares_sold
+            
+            if remaining_shares > 0:
+                cursor.execute('''
+                    UPDATE portfolio_stocks 
+                    SET shares = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (remaining_shares, portfolio_stock_id))
+            else:
+                # Remove the stock if all shares are sold
+                cursor.execute('DELETE FROM portfolio_stocks WHERE id = ?', (portfolio_stock_id,))
+            
+            conn.commit()
+            return True, f"Successfully sold {shares_sold} shares of {stock_dict['ticker']}. Real profit: ${real_profit:.2f}"
+    
+    def get_sales_history(self) -> List[Dict]:
+        """Get all sales transactions"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT st.*, ps.company_name 
+                FROM sales_transactions st
+                LEFT JOIN portfolio_stocks ps ON st.portfolio_stock_id = ps.id
+                ORDER BY st.sell_date DESC, st.created_at DESC
+            ''')
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def get_sales_for_stock(self, portfolio_stock_id: int) -> List[Dict]:
+        """Get sales transactions for a specific stock"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM sales_transactions 
+                WHERE portfolio_stock_id = ?
+                ORDER BY sell_date DESC, created_at DESC
+            ''', (portfolio_stock_id,))
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def get_total_realized_profits(self) -> float:
+        """Calculate total realized profits from all sales"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT SUM(real_profit) FROM sales_transactions')
+            result = cursor.fetchone()
+            return result[0] if result[0] else 0.0
     
     def export_portfolio_to_csv(self) -> str:
         """Export portfolio data to CSV format"""

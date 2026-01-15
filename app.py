@@ -22,6 +22,8 @@ st.sidebar.title("📈 Portfolio Management")
 page = st.sidebar.selectbox("Choose a page", [
     "Portfolio Overview", 
     "Add Stock", 
+    "Sell Stock",
+    "Sales History",
     "Trading Strategy", 
     "Recommendations",
     "Settings"
@@ -117,6 +119,9 @@ if page == "Portfolio Overview":
         total_shares = portfolio_df['shares'].sum()
         total_profit_loss_percent = (total_profit_loss / total_purchase_value) * 100 if total_purchase_value > 0 else 0
         
+        # Get realized profits
+        total_realized_profits = db.get_total_realized_profits()
+        
         # Display summary cards
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -132,6 +137,39 @@ if page == "Portfolio Overview":
                 f"${total_profit_loss:,.2f}",
                 f"{total_profit_loss_percent:+.2f}%",
                 delta_color=profit_color
+            )
+        
+        # Additional summary row with realized profits
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Investment", f"${total_purchase_value:,.2f}")
+        with col2:
+            total_gain_loss = total_current_value - total_purchase_value
+            total_gain_loss_percent = (total_gain_loss / total_purchase_value) * 100 if total_purchase_value > 0 else 0
+            gain_loss_color = "normal" if total_gain_loss >= 0 else "inverse"
+            st.metric(
+                "Unrealized P/L",
+                f"${total_gain_loss:,.2f}",
+                f"{total_gain_loss_percent:+.2f}%",
+                delta_color=gain_loss_color
+            )
+        with col3:
+            realized_color = "normal" if total_realized_profits >= 0 else "inverse"
+            st.metric(
+                "Realized P/L",
+                f"${total_realized_profits:,.2f}",
+                delta_color=realized_color
+            )
+        with col4:
+            overall_total = total_gain_loss + total_realized_profits
+            overall_investment = total_purchase_value
+            overall_percent = (overall_total / overall_investment) * 100 if overall_investment > 0 else 0
+            overall_color = "normal" if overall_total >= 0 else "inverse"
+            st.metric(
+                "Overall P/L",
+                f"${overall_total:,.2f}",
+                f"{overall_percent:+.2f}%",
+                delta_color=overall_color
             )
         
         # Portfolio details table
@@ -162,7 +200,7 @@ if page == "Portfolio Overview":
         styled_df = display_df.style.map(color_profit_loss, subset=['Profit/Loss'])
         styled_df = styled_df.map(color_percent, subset=['P/L %'])
         
-        st.dataframe(styled_df, use_container_width=True)
+        st.dataframe(styled_df, width='stretch')
         
         # Portfolio distribution chart
         st.subheader("Portfolio Distribution by Current Value")
@@ -277,6 +315,259 @@ elif page == "Add Stock":
                 st.info("Please check if the ticker symbol is correct and try again.")
         else:
             st.warning("Please enter all required fields: ticker, shares, and purchase price.")
+
+# Sell Stock Page
+elif page == "Sell Stock":
+    st.header("💰 Sell Stock from Portfolio")
+    
+    portfolio = db.get_portfolio()
+    if not portfolio:
+        st.warning("⚠️ No stocks in portfolio to sell. Add stocks first.")
+        st.stop()
+    
+    # Select stock to sell
+    stock_options = [(f"{stock['ticker']} - {stock['shares']} shares @ ${stock['purchase_price']:.2f}", stock['id']) for stock in portfolio]
+    selected_stock_id = st.selectbox("Select Stock to Sell", [sid for _, sid in stock_options], 
+                                    format_func=lambda x: next(t for t, sid in stock_options if sid == x))
+    
+    selected_stock = next(stock for stock in portfolio if stock['id'] == selected_stock_id)
+    
+    # Display stock details
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Available Shares", f"{selected_stock['shares']:,.0f}")
+    with col2:
+        st.metric("Purchase Price", f"${selected_stock['purchase_price']:.2f}")
+    with col3:
+        # Get current price
+        try:
+            stock_ticker = yf.Ticker(selected_stock['ticker'])
+            info = stock_ticker.info
+            current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+            if current_price is None:
+                hist = stock_ticker.history(period="1d")
+                if not hist.empty:
+                    current_price = hist['Close'].iloc[-1]
+                else:
+                    current_price = selected_stock['purchase_price']
+            st.metric("Current Price", f"${current_price:.2f}")
+        except:
+            st.metric("Current Price", f"${selected_stock['purchase_price']:.2f}")
+    
+    st.markdown("---")
+    
+    # Sale details
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        shares_to_sell = st.number_input(
+            "Shares to Sell",
+            min_value=0.0,
+            max_value=float(selected_stock['shares']),
+            step=1.0,
+            value=float(selected_stock['shares']),
+            help=f"Number of shares to sell (max: {selected_stock['shares']})"
+        )
+    
+    with col2:
+        sell_price = st.number_input(
+            "Sell Price per Share ($)",
+            min_value=0.0,
+            step=0.01,
+            value=current_price if 'current_price' in locals() else float(selected_stock['purchase_price']),
+            help="Price you're selling each share for"
+        )
+    
+    # Additional details
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        sell_date = st.date_input(
+            "Sell Date",
+            value=datetime.now().date(),
+            max_value=datetime.now().date(),
+            help="When did you sell these shares?"
+        )
+    
+    with col2:
+        tax_fee = st.number_input(
+            "Tax / Fee ($)",
+            min_value=0.0,
+            step=0.01,
+            value=0.0,
+            help="Any taxes or transaction fees"
+        )
+    
+    # Calculate profit preview
+    if shares_to_sell > 0:
+        purchase_cost = shares_to_sell * selected_stock['purchase_price']
+        sell_revenue = shares_to_sell * sell_price
+        gross_profit = sell_revenue - purchase_cost
+        real_profit = gross_profit - tax_fee
+        
+        st.markdown("### 💹 Profit Calculation")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Purchase Cost", f"${purchase_cost:,.2f}")
+        with col2:
+            st.metric("Sell Revenue", f"${sell_revenue:,.2f}")
+        with col3:
+            profit_color = "normal" if gross_profit >= 0 else "inverse"
+            st.metric("Gross Profit", f"${gross_profit:,.2f}", delta_color=profit_color)
+        with col4:
+            real_profit_color = "normal" if real_profit >= 0 else "inverse"
+            st.metric("Real Profit", f"${real_profit:,.2f}", delta_color=real_profit_color)
+    
+    # Delete stock option
+    st.markdown("---")
+    st.subheader("🗑️ Delete Stock Record")
+    
+    if st.checkbox("Show delete option"):
+        st.warning("⚠️ This will completely remove this stock from your portfolio without recording a sale.")
+        if st.button(f"Delete {selected_stock['ticker']} from Portfolio", type="secondary"):
+            if st.session_state.get('confirm_delete', False):
+                if db.delete_stock(selected_stock_id):
+                    st.success(f"✅ Successfully deleted {selected_stock['ticker']} from portfolio!")
+                    st.session_state.confirm_delete = False
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to delete stock from portfolio.")
+            else:
+                st.session_state.confirm_delete = True
+                st.warning("⚠️ Are you sure? Click again to confirm deleting this stock.")
+    
+    # Sell button
+    if shares_to_sell > 0 and sell_price > 0:
+        if st.button("Sell Shares", type="primary"):
+            success, message = db.sell_stock(
+                portfolio_stock_id=selected_stock_id,
+                shares_sold=shares_to_sell,
+                sell_price=sell_price,
+                sell_date=sell_date.strftime("%Y-%m-%d"),
+                tax_fee=tax_fee
+            )
+            
+            if success:
+                st.success(f"✅ {message}")
+                
+                # Show profit/loss summary
+                if real_profit >= 0:
+                    st.info(f"🟢 Realized Profit: ${real_profit:.2f}")
+                else:
+                    st.warning(f"🔴 Realized Loss: ${abs(real_profit):.2f}")
+                
+                # Show remaining shares if any
+                remaining_shares = selected_stock['shares'] - shares_to_sell
+                if remaining_shares > 0:
+                    st.info(f"📊 Remaining shares: {remaining_shares:.0f}")
+                else:
+                    st.info("📊 All shares sold - stock removed from portfolio")
+                    
+                # Refresh the page after a short delay
+                st.rerun()
+            else:
+                st.error(f"❌ {message}")
+    else:
+        st.warning("Please enter valid sell details.")
+
+# Sales History Page
+elif page == "Sales History":
+    st.header("📜 Sales History & Realized Profits")
+    
+    sales_history = db.get_sales_history()
+    
+    if sales_history:
+        # Calculate total realized profits
+        total_realized = db.get_total_realized_profits()
+        
+        # Summary metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Sales", len(sales_history))
+        with col2:
+            total_shares_sold = sum(sale['shares_sold'] for sale in sales_history)
+            st.metric("Total Shares Sold", f"{total_shares_sold:,.0f}")
+        with col3:
+            profit_color = "normal" if total_realized >= 0 else "inverse"
+            st.metric("Total Realized P/L", f"${total_realized:,.2f}", delta_color=profit_color)
+        
+        # Sales history table
+        st.subheader("📊 Sales Transactions")
+        
+        sales_df = pd.DataFrame(sales_history)
+        
+        # Format for display
+        display_df = sales_df[[
+            'ticker', 'company_name', 'shares_sold', 'purchase_price', 'sell_price',
+            'sell_date', 'tax_fee', 'real_profit', 'created_at'
+        ]].copy()
+        
+        # Calculate additional columns
+        display_df['total_purchase'] = display_df['shares_sold'] * display_df['purchase_price']
+        display_df['total_sell'] = display_df['shares_sold'] * display_df['sell_price']
+        display_df['profit_percent'] = (display_df['real_profit'] / display_df['total_purchase']) * 100
+        
+        # Format columns
+        display_df['shares_sold'] = display_df['shares_sold'].apply(lambda x: f"{x:,.0f}")
+        display_df['purchase_price'] = display_df['purchase_price'].apply(lambda x: f"${x:.2f}")
+        display_df['sell_price'] = display_df['sell_price'].apply(lambda x: f"${x:.2f}")
+        display_df['total_purchase'] = display_df['total_purchase'].apply(lambda x: f"${x:,.2f}")
+        display_df['total_sell'] = display_df['total_sell'].apply(lambda x: f"${x:,.2f}")
+        display_df['tax_fee'] = display_df['tax_fee'].apply(lambda x: f"${x:.2f}")
+        display_df['real_profit'] = display_df['real_profit'].apply(lambda x: f"${x:,.2f}")
+        display_df['profit_percent'] = display_df['profit_percent'].apply(lambda x: f"{x:+.2f}%")
+        display_df['sell_date'] = pd.to_datetime(display_df['sell_date']).dt.strftime('%Y-%m-%d')
+        
+        display_df.columns = [
+            'Ticker', 'Company', 'Shares Sold', 'Purchase Price', 'Sell Price',
+            'Sell Date', 'Tax/Fee', 'Real Profit', 'Created At',
+            'Total Purchase', 'Total Sell', 'Profit %'
+        ]
+        
+        # Reorder columns
+        display_df = display_df[[
+            'Ticker', 'Company', 'Shares Sold', 'Purchase Price', 'Sell Price',
+            'Total Purchase', 'Total Sell', 'Tax/Fee', 'Real Profit', 'Profit %',
+            'Sell Date', 'Created At'
+        ]]
+        
+        # Color code profit columns
+        def color_profit(val):
+            if isinstance(val, str) and '$' in val:
+                try:
+                    num_val = float(val.replace('$', '').replace(',', ''))
+                    if num_val > 0:
+                        return 'color: green'
+                    elif num_val < 0:
+                        return 'color: red'
+                except:
+                    pass
+            return ''
+        
+        def color_percent(val):
+            if isinstance(val, str) and '%' in val:
+                if val.startswith('+'):
+                    return 'color: green'
+                elif val.startswith('-'):
+                    return 'color: red'
+            return ''
+        
+        styled_df = display_df.style.map(color_profit, subset=['Real Profit'])
+        styled_df = styled_df.map(color_percent, subset=['Profit %'])
+        
+        st.dataframe(styled_df, width='stretch')
+        
+        # Export sales history
+        csv_data = display_df.to_csv(index=False)
+        st.download_button(
+            label="📄 Export Sales History to CSV",
+            data=csv_data,
+            file_name=f"sales_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
+        
+    else:
+        st.info("📝 No sales recorded yet. Go to 'Sell Stock' to record your first sale.")
 
 # Trading Strategy Page
 elif page == "Trading Strategy":
@@ -449,7 +740,7 @@ elif page == "Recommendations":
                     return 'color: orange'
             
             styled_recs = rec_df.style.map(color_action, subset=['action'])
-            st.dataframe(styled_recs, use_container_width=True)
+            st.dataframe(styled_recs, width='stretch')
         else:
             st.info("No previous recommendations found.")
     
