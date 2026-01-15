@@ -26,6 +26,9 @@ page = st.sidebar.selectbox("Choose a page", [
     "Sell Stock",
     "Sales History",
     "Trading Strategy", 
+    "Watchlist",
+    "Add to Watchlist",
+    "Edit Watchlist",
     "Recommendations",
     "Settings"
 ])
@@ -956,72 +959,690 @@ elif page == "Trading Strategy":
         db.save_strategy_settings(selected_stock['ticker'], strategy_type, parameters)
         st.success(f"✅ Strategy settings saved for {selected_stock['ticker']}!")
 
+# Watchlist Page
+elif page == "Watchlist":
+    st.header("👁️ Stock Watchlist")
+    
+    watchlist = db.get_watchlist()
+    
+    if watchlist:
+        enriched_watchlist = []
+        
+        for stock in watchlist:
+            try:
+                # Get current stock data
+                stock_ticker = yf.Ticker(stock['ticker'])
+                info = stock_ticker.info
+                
+                # Get current price
+                current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                
+                if current_price is None:
+                    hist = stock_ticker.history(period="1d")
+                    if not hist.empty:
+                        current_price = hist['Close'].iloc[-1]
+                    else:
+                        current_price = 0.0
+                
+                # Calculate price differences
+                buy_diff = None
+                sell_diff = None
+                buy_diff_pct = None
+                sell_diff_pct = None
+                
+                if stock['target_buy_price']:
+                    buy_diff = current_price - stock['target_buy_price']
+                    buy_diff_pct = (buy_diff / stock['target_buy_price']) * 100 if stock['target_buy_price'] > 0 else 0
+                
+                if stock['target_sell_price']:
+                    sell_diff = current_price - stock['target_sell_price']
+                    sell_diff_pct = (sell_diff / stock['target_sell_price']) * 100 if stock['target_sell_price'] > 0 else 0
+                
+                enriched_stock = {
+                    'id': stock['id'],
+                    'ticker': stock['ticker'],
+                    'company_name': info.get('shortName', stock['ticker']),
+                    'current_price': current_price,
+                    'target_buy_price': stock['target_buy_price'],
+                    'target_sell_price': stock['target_sell_price'],
+                    'buy_diff': buy_diff,
+                    'buy_diff_pct': buy_diff_pct,
+                    'sell_diff': sell_diff,
+                    'sell_diff_pct': sell_diff_pct,
+                    'notes': stock['notes'],
+                    'status': stock['status'],
+                    'created_at': stock['created_at'],
+                    'updated_at': stock['updated_at']
+                }
+                
+                enriched_watchlist.append(enriched_stock)
+                
+            except Exception as e:
+                st.error(f"Error fetching data for {stock['ticker']}: {str(e)}")
+                continue
+        
+        # Summary metrics
+        buy_alerts = sum(1 for stock in enriched_watchlist if stock['buy_diff'] is not None and stock['buy_diff'] <= 0)
+        sell_alerts = sum(1 for stock in enriched_watchlist if stock['sell_diff'] is not None and stock['sell_diff'] >= 0)
+        near_buy = sum(1 for stock in enriched_watchlist if stock['buy_diff_pct'] is not None and -5 <= stock['buy_diff_pct'] <= 10)
+        near_sell = sum(1 for stock in enriched_watchlist if stock['sell_diff_pct'] is not None and -10 <= stock['sell_diff_pct'] <= 5)
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("📊 Total Watched", len(enriched_watchlist))
+        with col2:
+            st.metric("🟢 Buy Alerts", buy_alerts, delta=f"{buy_alerts} at/below target")
+        with col3:
+            st.metric("🔴 Sell Alerts", sell_alerts, delta=f"{sell_alerts} at/above target")
+        with col4:
+            st.metric("👀 Near Target", near_buy + near_sell, delta=f"{near_buy} buy, {near_sell} sell")
+        
+        # Watchlist table
+        st.subheader("📋 Watchlist Details")
+        
+        for stock in enriched_watchlist:
+            # Determine status color and alerts
+            status_color = "⚪"
+            alert_info = []
+            
+            if stock['buy_diff'] is not None and stock['buy_diff'] <= 0:
+                status_color = "🟢"
+                alert_info.append("BUY TARGET REACHED!")
+            elif stock['buy_diff_pct'] is not None and -5 <= stock['buy_diff_pct'] <= 10:
+                alert_info.append("Near buy target")
+            
+            if stock['sell_diff'] is not None and stock['sell_diff'] >= 0:
+                status_color = "🔴"
+                alert_info.append("SELL TARGET REACHED!")
+            elif stock['sell_diff_pct'] is not None and -10 <= stock['sell_diff_pct'] <= 5:
+                alert_info.append("Near sell target")
+            
+            with st.expander(f"{status_color} {stock['ticker']} - ${stock['current_price']:.2f}"):
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    st.write(f"**Company:** {stock['company_name']}")
+                    st.write(f"**Status:** {stock['status']}")
+                    
+            if stock['target_buy_price']:
+                buy_color = "inverse" if stock['buy_diff'] <= 0 else "normal" if -5 <= stock['buy_diff_pct'] <= 10 else "off"
+                st.metric(
+                    "Buy Target", 
+                    f"${stock['target_buy_price']:.2f}", 
+                    delta=f"{stock['buy_diff_pct']:+.2f}%" if stock['buy_diff_pct'] else None,
+                    delta_color=buy_color
+                )
+            
+            if stock['target_sell_price']:
+                sell_color = "inverse" if stock['sell_diff'] >= 0 else "normal" if -10 <= stock['sell_diff_pct'] <= 5 else "off"
+                st.metric(
+                    "Sell Target", 
+                    f"${stock['target_sell_price']:.2f}", 
+                    delta=f"{stock['sell_diff_pct']:+.2f}%" if stock['sell_diff_pct'] else None,
+                    delta_color=sell_color
+                )
+                
+                with col2:
+                    if alert_info:
+                        for alert in alert_info:
+                            if "REACHED" in alert:
+                                st.success(alert)
+                            else:
+                                st.info(alert)
+                    
+                    if stock['notes']:
+                        st.write(f"**Notes:** {stock['notes']}")
+                    
+                    st.write(f"**Added:** {stock['created_at'][:10]}")
+        
+        # Export watchlist
+        csv_data = db.export_watchlist_to_csv()
+        if csv_data:
+            st.download_button(
+                label="📄 Export Watchlist to CSV",
+                data=csv_data,
+                file_name=f"watchlist_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+        
+        # Clear watchlist button
+        if st.button("Clear Entire Watchlist", type="secondary"):
+            if st.session_state.get('confirm_clear_watchlist', False):
+                db.clear_watchlist()
+                st.success("Watchlist cleared successfully!")
+                st.session_state.confirm_clear_watchlist = False
+                st.rerun()
+            else:
+                st.session_state.confirm_clear_watchlist = True
+                st.warning("⚠️ Are you sure? Click again to confirm clearing the entire watchlist.")
+        
+    else:
+        st.info("📝 No stocks in your watchlist yet. Go to 'Add to Watchlist' to get started!")
+
+# Add to Watchlist Page
+elif page == "Add to Watchlist":
+    st.header("➕ Add Stock to Watchlist")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        ticker = st.text_input(
+            "Stock Ticker",
+            placeholder="e.g., AAPL, GOOGL, MSFT",
+            help="Enter the stock ticker symbol to watch"
+        ).upper()
+    
+    # Target prices
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        target_buy_price = st.number_input(
+            "Target Buy Price",
+            min_value=0.0,
+            step=0.01,
+            value=0.0,
+            help="Price at which you want to buy this stock (optional)"
+        )
+    
+    with col2:
+        target_sell_price = st.number_input(
+            "Target Sell Price",
+            min_value=0.0,
+            step=0.01,
+            value=0.0,
+            help="Price at which you want to sell this stock (optional)"
+        )
+    
+    # Notes
+    notes = st.text_area(
+        "Notes",
+        placeholder="Add any notes about why you're watching this stock...",
+        help="Optional notes about your investment thesis or reasons for watching"
+    )
+    
+    # Preview stock info
+    if ticker:
+        try:
+            with st.spinner("Fetching stock information..."):
+                stock = yf.Ticker(ticker)
+                info = stock.info
+                current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                
+                if current_price is None:
+                    hist = stock.history(period="1d")
+                    if not hist.empty:
+                        current_price = hist['Close'].iloc[-1]
+                    else:
+                        st.error("Could not fetch current price for this ticker.")
+                        current_price = 0.0
+                
+                st.subheader(f"📊 {ticker} - {info.get('shortName', ticker)}")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Current Price", f"${current_price:.2f}")
+                with col2:
+                    if target_buy_price > 0:
+                        buy_diff = current_price - target_buy_price
+                        buy_diff_pct = (buy_diff / target_buy_price) * 100 if target_buy_price > 0 else 0
+                        color = "normal" if buy_diff > 0 else "inverse"
+                        st.metric("vs Buy Target", f"${target_buy_price:.2f}", f"{buy_diff_pct:+.2f}%", delta_color=color)
+                with col3:
+                    if target_sell_price > 0:
+                        sell_diff = current_price - target_sell_price
+                        sell_diff_pct = (sell_diff / target_sell_price) * 100 if target_sell_price > 0 else 0
+                        color = "normal" if sell_diff < 0 else "inverse"
+                        st.metric("vs Sell Target", f"${target_sell_price:.2f}", f"{sell_diff_pct:+.2f}%", delta_color=color)
+                
+        except Exception as e:
+            st.error(f"Error fetching data for {ticker}: {str(e)}")
+            st.info("Please check if the ticker symbol is correct and try again.")
+    
+    # Add to watchlist button
+    if st.button("Add to Watchlist", type="primary"):
+        if ticker:
+            try:
+                watchlist_id = db.add_to_watchlist(
+                    ticker=ticker,
+                    target_buy_price=target_buy_price if target_buy_price > 0 else None,
+                    target_sell_price=target_sell_price if target_sell_price > 0 else None,
+                    notes=notes if notes else None
+                )
+                
+                st.success(f"✅ Successfully added {ticker} to watchlist!")
+                
+                # Show target price status if targets are set
+                if target_buy_price > 0 or target_sell_price > 0:
+                    if current_price and target_buy_price > 0:
+                        buy_status = "🟢 BUY TARGET REACHED!" if current_price <= target_buy_price else f"👀 Waiting for price to drop to ${target_buy_price:.2f}"
+                        st.info(buy_status)
+                    
+                    if current_price and target_sell_price > 0:
+                        sell_status = "🔴 SELL TARGET REACHED!" if current_price >= target_sell_price else f"👀 Waiting for price to rise to ${target_sell_price:.2f}"
+                        st.info(sell_status)
+                else:
+                    st.info("📝 Stock added to watchlist. You can set target prices later or get recommendations!")
+                
+            except Exception as e:
+                st.error(f"Error adding to watchlist: {str(e)}")
+        else:
+            st.warning("Please enter a valid ticker symbol.")
+
+# Edit Watchlist Page
+elif page == "Edit Watchlist":
+    st.header("✏️ Edit Watchlist")
+    
+    watchlist = db.get_watchlist()
+    if not watchlist:
+        st.warning("⚠️ No stocks in watchlist to edit. Add stocks first.")
+        st.stop()
+    
+    # Select stock to edit
+    stock_options = [(f"{stock['ticker']} - Buy: ${stock['target_buy_price'] or 'N/A'}, Sell: ${stock['target_sell_price'] or 'N/A'}", stock['ticker']) for stock in watchlist]
+    selected_ticker = st.selectbox("Select Stock to Edit", [ticker for _, ticker in stock_options], 
+                                   format_func=lambda x: next(t for t, sid in stock_options if sid == x))
+    
+    selected_stock = next(stock for stock in watchlist if stock['ticker'] == selected_ticker)
+    
+    # Display current stock info
+    st.subheader(f"📊 Current Information for {selected_stock['ticker']}")
+    
+    try:
+        stock_ticker = yf.Ticker(selected_stock['ticker'])
+        info = stock_ticker.info
+        current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+        
+        if current_price is None:
+            hist = stock_ticker.history(period="1d")
+            if not hist.empty:
+                current_price = hist['Close'].iloc[-1]
+            else:
+                current_price = 0.0
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Current Price", f"${current_price:.2f}")
+        with col2:
+            if selected_stock['target_buy_price']:
+                buy_diff = current_price - selected_stock['target_buy_price']
+                buy_diff_pct = (buy_diff / selected_stock['target_buy_price']) * 100
+                color = "normal" if buy_diff > 0 else "inverse"
+                st.metric("Buy Target", f"${selected_stock['target_buy_price']:.2f}", f"{buy_diff_pct:+.2f}%", delta_color=color)
+        with col3:
+            if selected_stock['target_sell_price']:
+                sell_diff = current_price - selected_stock['target_sell_price']
+                sell_diff_pct = (sell_diff / selected_stock['target_sell_price']) * 100
+                color = "normal" if sell_diff < 0 else "inverse"
+                st.metric("Sell Target", f"${selected_stock['target_sell_price']:.2f}", f"{sell_diff_pct:+.2f}%", delta_color=color)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Status", selected_stock['status'])
+        with col2:
+            st.metric("Added", selected_stock['created_at'][:10])
+        
+    except Exception as e:
+        st.warning(f"Could not fetch current price: {str(e)}")
+    
+    if selected_stock['notes']:
+        st.info(f"**Notes:** {selected_stock['notes']}")
+    
+    st.markdown("---")
+    
+    # Edit form
+    st.subheader("📝 Edit Watchlist Details")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        new_target_buy_price = st.number_input(
+            "Target Buy Price",
+            min_value=0.0,
+            step=0.01,
+            value=float(selected_stock['target_buy_price']) if selected_stock['target_buy_price'] else 0.0,
+            help="Update the target buy price (0 to remove)"
+        )
+    
+    with col2:
+        new_target_sell_price = st.number_input(
+            "Target Sell Price",
+            min_value=0.0,
+            step=0.01,
+            value=float(selected_stock['target_sell_price']) if selected_stock['target_sell_price'] else 0.0,
+            help="Update the target sell price (0 to remove)"
+        )
+    
+    new_status = st.selectbox(
+        "Status",
+        ["watching", "ready_to_buy", "ready_to_sell", "paused"],
+        index=["watching", "ready_to_buy", "ready_to_sell", "paused"].index(selected_stock['status']),
+        help="Update the watch status"
+    )
+    
+    new_notes = st.text_area(
+        "Notes",
+        value=selected_stock['notes'] or '',
+        placeholder="Update your notes about this stock...",
+        help="Update your investment thesis or reasons for watching"
+    )
+    
+    # Update button
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        if st.button("Update Watchlist Stock", type="primary"):
+            success = db.update_watchlist_stock(
+                ticker=selected_stock['ticker'],
+                target_buy_price=new_target_buy_price if new_target_buy_price > 0 else None,
+                target_sell_price=new_target_sell_price if new_target_sell_price > 0 else None,
+                status=new_status,
+                notes=new_notes if new_notes else None
+            )
+            
+            if success:
+                st.success(f"✅ Successfully updated {selected_stock['ticker']}!")
+                
+                # Show changes summary
+                changes = []
+                if new_target_buy_price != selected_stock['target_buy_price']:
+                    changes.append(f"Buy Target: ${selected_stock['target_buy_price'] or 'N/A'} → ${new_target_buy_price or 'N/A'}")
+                if new_target_sell_price != selected_stock['target_sell_price']:
+                    changes.append(f"Sell Target: ${selected_stock['target_sell_price'] or 'N/A'} → ${new_target_sell_price or 'N/A'}")
+                if new_status != selected_stock['status']:
+                    changes.append(f"Status: {selected_stock['status']} → {new_status}")
+                
+                if changes:
+                    st.info("Changes made:")
+                    for change in changes:
+                        st.write(f"• {change}")
+            else:
+                st.error("❌ Failed to update watchlist stock. Please try again.")
+    
+    with col2:
+        if st.button(f"Remove {selected_stock['ticker']}", type="secondary"):
+            if st.session_state.get('confirm_remove_watchlist', False):
+                if db.remove_from_watchlist(selected_stock['ticker']):
+                    st.success(f"✅ Successfully removed {selected_stock['ticker']} from watchlist!")
+                    st.session_state.confirm_remove_watchlist = False
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to remove stock from watchlist.")
+            else:
+                st.session_state.confirm_remove_watchlist = True
+                st.warning("⚠️ Are you sure? Click again to confirm removing this stock from watchlist.")
+    
+    # AI Recommendation Section
+    st.markdown("---")
+    st.subheader(f"🤖 AI Recommendation for {selected_stock['ticker']}")
+    
+    if st.button("Get AI Recommendation", type="primary"):
+        with st.spinner("🔄 Analyzing stock with AI..."):
+            try:
+                # Get recommendation using the watchlist strategy
+                recommendation = strategy.get_watchlist_recommendation(
+                    ticker=selected_stock['ticker'],
+                    current_price=current_price if 'current_price' in locals() else 0.0,
+                    target_buy_price=selected_stock['target_buy_price'],
+                    target_sell_price=selected_stock['target_sell_price'],
+                    notes=selected_stock['notes']
+                )
+                
+                # Display recommendation
+                action_color = {
+                    'BUY': '🟢',
+                    'SELL': '🔴', 
+                    'WATCH': '👀'
+                }.get(recommendation['action'], '⚪')
+                
+                st.markdown(f"### {action_color} Recommendation: {recommendation['action']}")
+                st.metric("Confidence", f"{recommendation['confidence']:.1%}")
+                st.write(f"**Reason:** {recommendation['reason']}")
+                st.write(f"**Strategy:** {recommendation['strategy'].title()}")
+                
+                # Display suggested prices if available
+                ai_suggested_buy = recommendation.get('suggested_buy_price')
+                ai_suggested_sell = recommendation.get('suggested_sell_price')
+                
+                if ai_suggested_buy:
+                    st.write(f"💡 **AI Suggested Buy Price:** ${ai_suggested_buy:.2f}")
+                
+                if ai_suggested_sell:
+                    st.write(f"💰 **AI Suggested Sell Price:** ${ai_suggested_sell:.2f}")
+                
+                # AI Suggested Target Prices Section
+                if ai_suggested_buy or ai_suggested_sell:
+                    st.subheader("🤖 AI-Recommended Target Prices")
+                    
+                    if ai_suggested_buy and ai_suggested_sell:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("AI Buy Target", f"${ai_suggested_buy:.2f}")
+                        with col2:
+                            st.metric("AI Sell Target", f"${ai_suggested_sell:.2f}")
+                        
+                        # Apply AI suggestions button
+                        if st.button("🚀 Apply AI Target Prices", key=f"apply_ai_targets_{selected_stock['ticker']}", type="primary"):
+                            success = db.update_watchlist_stock(
+                                ticker=selected_stock['ticker'],
+                                target_buy_price=ai_suggested_buy,
+                                target_sell_price=ai_suggested_sell,
+                                status="watching"
+                            )
+                            if success:
+                                st.success("✅ AI-recommended target prices applied successfully!")
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to apply AI target prices")
+                    
+                    elif ai_suggested_buy:
+                        st.metric("AI Buy Target", f"${ai_suggested_buy:.2f}")
+                        
+                        if st.button("🚀 Apply AI Buy Target", key=f"apply_ai_buy_{selected_stock['ticker']}", type="primary"):
+                            success = db.update_watchlist_stock(
+                                ticker=selected_stock['ticker'],
+                                target_buy_price=ai_suggested_buy,
+                                status="ready_to_buy"
+                            )
+                            if success:
+                                st.success("✅ AI-recommended buy target applied successfully!")
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to apply AI buy target")
+                    
+                    elif ai_suggested_sell:
+                        st.metric("AI Sell Target", f"${ai_suggested_sell:.2f}")
+                        
+                        if st.button("🚀 Apply AI Sell Target", key=f"apply_ai_sell_{selected_stock['ticker']}", type="primary"):
+                            success = db.update_watchlist_stock(
+                                ticker=selected_stock['ticker'],
+                                target_sell_price=ai_suggested_sell,
+                                status="ready_to_sell"
+                            )
+                            if success:
+                                st.success("✅ AI-recommended sell target applied successfully!")
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to apply AI sell target")
+                
+                # Fallback suggested target prices based on recommendation action
+                if recommendation['action'] in ['BUY', 'SELL']:
+                    st.subheader("💡 Strategy-Based Target Prices")
+                    
+                    if recommendation['action'] == 'BUY':
+                        # Suggest buy target slightly below current price
+                        suggested_buy = current_price * 0.98  # 2% below current price
+                        suggested_sell = current_price * 1.15  # 15% above current price
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Strategy Buy Target", f"${suggested_buy:.2f}")
+                        with col2:
+                            st.metric("Strategy Sell Target", f"${suggested_sell:.2f}")
+                        
+                        if st.button("💾 Apply Strategy Targets", key=f"apply_strategy_targets_{selected_stock['ticker']}"):
+                            success = db.update_watchlist_stock(
+                                ticker=selected_stock['ticker'],
+                                target_buy_price=suggested_buy,
+                                target_sell_price=suggested_sell,
+                                status="ready_to_buy"
+                            )
+                            if success:
+                                st.success("✅ Strategy-based targets applied!")
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to apply strategy targets")
+                    
+                    elif recommendation['action'] == 'SELL':
+                        # Suggest sell target at current price
+                        suggested_sell = current_price
+                        
+                        st.metric("Strategy Sell Target", f"${suggested_sell:.2f}")
+                        
+                        if st.button("💾 Apply Strategy Sell Target", key=f"apply_strategy_sell_{selected_stock['ticker']}"):
+                            success = db.update_watchlist_stock(
+                                ticker=selected_stock['ticker'],
+                                target_sell_price=suggested_sell,
+                                status="ready_to_sell"
+                            )
+                            if success:
+                                st.success("✅ Strategy-based sell target applied!")
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to apply strategy sell target")
+                
+                # Log the recommendation
+                db.log_recommendation(
+                    ticker=selected_stock['ticker'],
+                    action=recommendation['action'],
+                    reason=recommendation['reason'],
+                    confidence=recommendation['confidence'],
+                    price=current_price if 'current_price' in locals() else 0.0
+                )
+                
+            except Exception as e:
+                st.error(f"Error getting recommendation: {str(e)}")
+
 # Recommendations Page
 elif page == "Recommendations":
     st.header("💡 AI Trading Recommendations")
     
     portfolio = db.get_portfolio()
-    if not portfolio:
-        st.warning("⚠️ No stocks in portfolio. Add stocks first to get recommendations.")
+    watchlist = db.get_watchlist()
+    
+    if not portfolio and not watchlist:
+        st.warning("⚠️ No stocks in portfolio or watchlist. Add stocks first to get recommendations.")
         st.stop()
     
-    # Get all recommendations
-    with st.spinner("🔄 Analyzing portfolio and generating recommendations..."):
-        recommendations = strategy.get_all_portfolio_recommendations(portfolio)
+    # Get portfolio recommendations
+    portfolio_recommendations = []
+    watchlist_recommendations = []
     
-    if recommendations:
+    with st.spinner("🔄 Analyzing portfolio and watchlist..."):
+        if portfolio:
+            portfolio_recommendations = strategy.get_all_portfolio_recommendations(portfolio)
+        
+        if watchlist:
+            watchlist_recommendations = strategy.get_watchlist_recommendations(watchlist)
+    
+    all_recommendations = portfolio_recommendations + watchlist_recommendations
+    
+    if all_recommendations:
         # Summary dashboard
-        buy_count = sum(1 for r in recommendations if r['action'] == 'BUY')
-        sell_count = sum(1 for r in recommendations if r['action'] == 'SELL')
-        hold_count = sum(1 for r in recommendations if r['action'] == 'HOLD')
+        portfolio_buy = sum(1 for r in portfolio_recommendations if r['action'] == 'BUY')
+        portfolio_sell = sum(1 for r in portfolio_recommendations if r['action'] == 'SELL')
+        portfolio_hold = sum(1 for r in portfolio_recommendations if r['action'] == 'HOLD')
+        
+        watchlist_buy = sum(1 for r in watchlist_recommendations if r['action'] == 'BUY')
+        watchlist_sell = sum(1 for r in watchlist_recommendations if r['action'] == 'SELL')
+        watchlist_watch = sum(1 for r in watchlist_recommendations if r['action'] == 'WATCH')
         
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("📈 Buy Signals", buy_count, delta=f"{buy_count} stocks")
+            st.metric("📈 Buy Signals", portfolio_buy + watchlist_buy, delta=f"Portfolio: {portfolio_buy}, Watchlist: {watchlist_buy}")
         with col2:
-            st.metric("📉 Sell Signals", sell_count, delta=f"{sell_count} stocks")
+            st.metric("📉 Sell Signals", portfolio_sell + watchlist_sell, delta=f"Portfolio: {portfolio_sell}, Watchlist: {watchlist_sell}")
         with col3:
-            st.metric("⏸️ Hold", hold_count, delta=f"{hold_count} stocks")
+            st.metric("⏸️ Hold/Watch", portfolio_hold + watchlist_watch, delta=f"Hold: {portfolio_hold}, Watch: {watchlist_watch}")
         with col4:
-            avg_confidence = sum(r['confidence'] for r in recommendations) / len(recommendations)
+            avg_confidence = sum(r['confidence'] for r in all_recommendations) / len(all_recommendations)
             st.metric("🎯 Avg Confidence", f"{avg_confidence:.1%}")
         
-        # Detailed recommendations
-        st.subheader("📋 Detailed Recommendations")
+        # Portfolio recommendations
+        if portfolio_recommendations:
+            st.subheader("📋 Portfolio Recommendations")
+            
+            for rec in portfolio_recommendations:
+                stock = rec['stock_data']
+                
+                # Color coding for action
+                action_color = {
+                    'BUY': '🟢',
+                    'SELL': '🔴', 
+                    'HOLD': '🟡'
+                }.get(rec['action'], '⚪')
+                
+                with st.expander(f"{action_color} Portfolio: {stock['ticker']} - {rec['action']} (Confidence: {rec['confidence']:.1%})"):
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.write(f"**Company:** {stock['company_name'] or stock['ticker']}")
+                        st.write(f"**Current Price:** {rec['current_price']:.2f}")
+                        st.write(f"**Purchase Price:** {stock['purchase_price']:.2f}")
+                        st.write(f"**Shares:** {stock['shares']:,.0f}")
+                        profit_loss = ((rec['current_price'] - stock['purchase_price']) / stock['purchase_price']) * 100
+                        st.write(f"**P/L:** {profit_loss:+.2f}%")
+                    
+                    with col2:
+                        st.write(f"**Strategy:** {rec['strategy'].title()}")
+                        st.write(f"**Reason:** {rec['reason']}")
+                    
+                    # Strategy settings badge
+                    settings = db.get_strategy_settings(stock['ticker'])
+                    if settings:
+                        st.info(f"⚙️ Strategy: {settings['strategy_type'].title()}")
         
-        for rec in recommendations:
-            stock = rec['stock_data']
+        # Watchlist recommendations
+        if watchlist_recommendations:
+            st.subheader("👁️ Watchlist Recommendations")
             
-            # Color coding for action
-            action_color = {
-                'BUY': '🟢',
-                'SELL': '🔴', 
-                'HOLD': '🟡'
-            }.get(rec['action'], '⚪')
-            
-            with st.expander(f"{action_color} {stock['ticker']} - {rec['action']} (Confidence: {rec['confidence']:.1%})"):
-                col1, col2 = st.columns([2, 1])
+            for rec in watchlist_recommendations:
+                watchlist_stock = rec['watchlist_data']
                 
-                with col1:
-                    st.write(f"**Company:** {stock['company_name'] or stock['ticker']}")
-                    st.write(f"**Current Price:** {rec['current_price']:.2f}")
-                    st.write(f"**Purchase Price:** {stock['purchase_price']:.2f}")
-                    st.write(f"**Shares:** {stock['shares']:,.0f}")
-                    profit_loss = ((rec['current_price'] - stock['purchase_price']) / stock['purchase_price']) * 100
-                    st.write(f"**P/L:** {profit_loss:+.2f}%")
+                # Color coding for action
+                action_color = {
+                    'BUY': '🟢',
+                    'SELL': '🔴', 
+                    'WATCH': '👀'
+                }.get(rec['action'], '⚪')
                 
-                with col2:
-                    st.write(f"**Strategy:** {rec['strategy'].title()}")
-                    st.write(f"**Reason:** {rec['reason']}")
-                
-                # Strategy settings badge
-                settings = db.get_strategy_settings(stock['ticker'])
-                if settings:
-                    st.info(f"⚙️ Strategy: {settings['strategy_type'].title()}")
+                with st.expander(f"{action_color} Watchlist: {watchlist_stock['ticker']} - {rec['action']} (Confidence: {rec['confidence']:.1%})"):
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.write(f"**Current Price:** {rec['current_price']:.2f}")
+                        if watchlist_stock['target_buy_price']:
+                            st.write(f"**Buy Target:** ${watchlist_stock['target_buy_price']:.2f}")
+                        if watchlist_stock['target_sell_price']:
+                            st.write(f"**Sell Target:** ${watchlist_stock['target_sell_price']:.2f}")
+                        st.write(f"**Status:** {watchlist_stock['status']}")
+                        
+                        if watchlist_stock['notes']:
+                            st.write(f"**Notes:** {watchlist_stock['notes']}")
+                    
+                    with col2:
+                        st.write(f"**Strategy:** {rec['strategy'].title()}")
+                        st.write(f"**Reason:** {rec['reason']}")
+                        
+                        # Quick action buttons if target reached
+                        if rec['action'] == 'BUY':
+                            if st.button(f"🛒 Quick Buy {watchlist_stock['ticker']}", key=f"buy_{watchlist_stock['ticker']}"):
+                                st.info(f"Redirect to buy {watchlist_stock['ticker']} at market price ${rec['current_price']:.2f}")
+                        elif rec['action'] == 'SELL':
+                            if st.button(f"💰 Quick Sell {watchlist_stock['ticker']}", key=f"sell_{watchlist_stock['ticker']}"):
+                                st.info(f"Ready to sell {watchlist_stock['ticker']} at market price ${rec['current_price']:.2f}")
         
         # Recent recommendations history
         st.subheader("📜 Recent Recommendation History")
-        recent_recs = db.get_recent_recommendations(20)
+        recent_recs = db.get_recent_recommendations(30)
         
         if recent_recs:
             rec_df = pd.DataFrame(recent_recs)
@@ -1032,6 +1653,8 @@ elif page == "Recommendations":
                     return 'color: green'
                 elif val == 'SELL':
                     return 'color: red'
+                elif val == 'WATCH':
+                    return 'color: blue'
                 else:
                     return 'color: orange'
             
@@ -1067,16 +1690,27 @@ elif page == "Settings":
             csv_data = db.export_portfolio_to_csv()
             if csv_data:
                 st.download_button(
-                    label="Download CSV",
+                    label="Download Portfolio CSV",
                     data=csv_data,
                     file_name=f"portfolio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+        
+        if st.button("👁️ Export Watchlist to CSV", type="secondary"):
+            csv_data = db.export_watchlist_to_csv()
+            if csv_data:
+                st.download_button(
+                    label="Download Watchlist CSV",
+                    data=csv_data,
+                    file_name=f"watchlist_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv"
                 )
         
         if st.button("🗑️ Clear All Data", type="secondary"):
             if st.session_state.get('confirm_clear_all', False):
                 db.clear_portfolio()
-                st.success("All portfolio data cleared!")
+                db.clear_watchlist()
+                st.success("All portfolio and watchlist data cleared!")
                 st.session_state.confirm_clear_all = False
                 st.rerun()
             else:

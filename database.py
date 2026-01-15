@@ -69,6 +69,20 @@ class PortfolioDatabase:
                 )
             ''')
             
+            # Watchlist table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS watchlist (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker TEXT UNIQUE NOT NULL,
+                    target_buy_price REAL,
+                    target_sell_price REAL,
+                    notes TEXT,
+                    status TEXT DEFAULT 'watching',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
             conn.commit()
     
     def add_stock(self, ticker: str, shares: float, purchase_date: str, 
@@ -368,6 +382,112 @@ class PortfolioDatabase:
             lines.append(f"{stock['id']},{stock['ticker']},{stock['shares']},"
                         f"{stock['purchase_date']},{stock['purchase_price']},"
                         f"{stock['company_name'] or ''},{stock['created_at']}")
+        
+        return "\n".join(lines)
+    
+    # Watchlist methods
+    def add_to_watchlist(self, ticker: str, target_buy_price: float = None, 
+                        target_sell_price: float = None, notes: str = None) -> int:
+        """Add a stock to the watchlist"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO watchlist 
+                (ticker, target_buy_price, target_sell_price, notes, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (ticker.upper(), target_buy_price, target_sell_price, notes))
+            
+            watchlist_id = cursor.lastrowid
+            conn.commit()
+            return watchlist_id
+    
+    def get_watchlist(self) -> List[Dict]:
+        """Get all stocks from watchlist"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM watchlist ORDER BY created_at')
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def get_watchlist_stock(self, ticker: str) -> Optional[Dict]:
+        """Get a specific stock from watchlist"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM watchlist WHERE ticker = ?', (ticker.upper(),))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    
+    def update_watchlist_stock(self, ticker: str, target_buy_price: float = None, 
+                              target_sell_price: float = None, notes: str = None, 
+                              status: str = None) -> bool:
+        """Update watchlist stock details"""
+        updates = []
+        params = []
+        
+        if target_buy_price is not None:
+            updates.append('target_buy_price = ?')
+            params.append(target_buy_price)
+        
+        if target_sell_price is not None:
+            updates.append('target_sell_price = ?')
+            params.append(target_sell_price)
+        
+        if notes is not None:
+            updates.append('notes = ?')
+            params.append(notes)
+        
+        if status is not None:
+            updates.append('status = ?')
+            params.append(status)
+        
+        if not updates:
+            return False
+        
+        updates.append('updated_at = CURRENT_TIMESTAMP')
+        params.append(ticker.upper())
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(f'''
+                UPDATE watchlist 
+                SET {', '.join(updates)}
+                WHERE ticker = ?
+            ''', params)
+            
+            updated = cursor.rowcount > 0
+            conn.commit()
+            return updated
+    
+    def remove_from_watchlist(self, ticker: str) -> bool:
+        """Remove a stock from watchlist"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM watchlist WHERE ticker = ?', (ticker.upper(),))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            return deleted
+    
+    def clear_watchlist(self) -> bool:
+        """Clear all stocks from watchlist"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM watchlist')
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            return deleted
+    
+    def export_watchlist_to_csv(self) -> str:
+        """Export watchlist data to CSV format"""
+        watchlist = self.get_watchlist()
+        if not watchlist:
+            return ""
+        
+        lines = ["ID,Ticker,Target Buy Price,Target Sell Price,Status,Notes,Created At"]
+        for stock in watchlist:
+            lines.append(f"{stock['id']},{stock['ticker']},{stock['target_buy_price'] or ''},"
+                        f"{stock['target_sell_price'] or ''},{stock['status']},"
+                        f"{stock['notes'] or ''},{stock['created_at']}")
         
         return "\n".join(lines)
 

@@ -318,6 +318,7 @@ class TradingStrategy:
                 
                 recommendation['stock_data'] = stock
                 recommendation['current_price'] = current_price
+                recommendation['source'] = 'portfolio'
                 recommendations.append(recommendation)
                 
             except Exception as e:
@@ -325,6 +326,181 @@ class TradingStrategy:
                 continue
         
         return recommendations
+    
+    def get_watchlist_recommendations(self, watchlist_data: List[Dict]) -> List[Dict]:
+        """Get trading recommendations for watchlist stocks based on target prices"""
+        recommendations = []
+        
+        for watchlist_stock in watchlist_data:
+            try:
+                # Get current price
+                stock_ticker = yf.Ticker(watchlist_stock['ticker'])
+                info = stock_ticker.info
+                current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                
+                if current_price is None:
+                    hist = stock_ticker.history(period="1d")
+                    if not hist.empty:
+                        current_price = hist['Close'].iloc[-1]
+                    else:
+                        continue
+                
+                recommendation = self.get_watchlist_recommendation(
+                    watchlist_stock['ticker'],
+                    current_price,
+                    watchlist_stock['target_buy_price'],
+                    watchlist_stock['target_sell_price'],
+                    watchlist_stock['notes']
+                )
+                
+                recommendation['watchlist_data'] = watchlist_stock
+                recommendation['current_price'] = current_price
+                recommendation['source'] = 'watchlist'
+                recommendations.append(recommendation)
+                
+            except Exception as e:
+                print(f"Error getting watchlist recommendation for {watchlist_stock['ticker']}: {e}")
+                continue
+        
+        return recommendations
+    
+    def get_watchlist_recommendation(self, ticker: str, current_price: float, 
+                                    target_buy_price: float = None, target_sell_price: float = None, 
+                                    notes: str = None) -> Dict:
+        """Get recommendation for a watchlist stock based on target prices"""
+        
+        # Check if buy target is reached
+        if target_buy_price and current_price <= target_buy_price:
+            return {
+                'action': 'BUY',
+                'reason': f'Target buy price reached: ${current_price:.2f} ≤ ${target_buy_price:.2f}',
+                'confidence': 0.85,
+                'strategy': 'watchlist_target'
+            }
+        
+        # Check if sell target is reached (for stocks we might already own or are monitoring)
+        if target_sell_price and current_price >= target_sell_price:
+            return {
+                'action': 'SELL',
+                'reason': f'Target sell price reached: ${current_price:.2f} ≥ ${target_sell_price:.2f}',
+                'confidence': 0.85,
+                'strategy': 'watchlist_target'
+            }
+        
+        # Provide proximity recommendations
+        if target_buy_price:
+            buy_proximity = (current_price - target_buy_price) / target_buy_price * 100
+            if -5 <= buy_proximity <= 10:  # Within 5% below to 10% above target
+                return {
+                    'action': 'WATCH',
+                    'reason': f'Near buy target: ${current_price:.2f} (Target: ${target_buy_price:.2f}, {buy_proximity:+.1f}%)',
+                    'confidence': 0.70,
+                    'strategy': 'watchlist_proximity'
+                }
+        
+        if target_sell_price:
+            sell_proximity = (current_price - target_sell_price) / target_sell_price * 100
+            if -10 <= sell_proximity <= 5:  # Within 10% below to 5% above target
+                return {
+                    'action': 'WATCH',
+                    'reason': f'Near sell target: ${current_price:.2f} (Target: ${target_sell_price:.2f}, {sell_proximity:+.1f}%)',
+                    'confidence': 0.70,
+                    'strategy': 'watchlist_proximity'
+                }
+        
+        # If no targets set, provide technical analysis based recommendation with price suggestions
+        if not target_buy_price and not target_sell_price:
+            # Get historical data for technical analysis
+            hist_data = self.get_historical_data(ticker)
+            
+            # Calculate suggested prices based on recent price action and technical indicators
+            suggested_buy = None
+            suggested_sell = None
+            action = 'WATCH'
+            reason = ''
+            confidence = 0.50
+            
+            if hist_data.empty or len(hist_data) < 20:
+                # Fallback to simple percentage-based suggestions
+                suggested_buy = current_price * 0.95  # 5% below current price
+                suggested_sell = current_price * 1.10  # 10% above current price
+                action = 'BUY'
+                reason = f'Price analysis suggests buy at ${suggested_buy:.2f} and sell at ${suggested_sell:.2f} based on current market conditions'
+                confidence = 0.60
+            else:
+                try:
+                    # Use simple moving average strategy for recommendation
+                    hist_data['MA_short'] = hist_data['Close'].rolling(window=20).mean()
+                    hist_data['MA_long'] = hist_data['Close'].rolling(window=50).mean()
+                    
+                    latest_short = hist_data['MA_short'].iloc[-1]
+                    latest_long = hist_data['MA_long'].iloc[-1]
+                    prev_short = hist_data['MA_short'].iloc[-2] if len(hist_data) > 1 else latest_short
+                    prev_long = hist_data['MA_long'].iloc[-2] if len(hist_data) > 1 else latest_long
+                    
+                    # Calculate recent price range for better targets
+                    recent_high = hist_data['High'].tail(20).max()
+                    recent_low = hist_data['Low'].tail(20).min()
+                    price_range = recent_high - recent_low
+                    
+                    # Check for golden cross or death cross
+                    if prev_short <= prev_long and latest_short > latest_long:
+                        # Golden cross - strong buy signal
+                        suggested_buy = current_price * 0.98  # Slightly below current price for entry
+                        suggested_sell = current_price * 1.20  # Conservative profit target
+                        action = 'BUY'
+                        reason = f'Golden cross detected + strong uptrend: Buy at ${suggested_buy:.2f}, Sell at ${suggested_sell:.2f}'
+                        confidence = 0.75
+                    elif prev_short >= prev_long and latest_short < latest_long:
+                        # Death cross - strong sell signal
+                        suggested_buy = recent_low * 0.90  # Wait for dip to recent low
+                        suggested_sell = current_price * 0.98  # Slightly below current for quick exit
+                        action = 'SELL'
+                        reason = f'Death cross detected + downtrend: Buy at ${suggested_buy:.2f}, Sell at ${suggested_sell:.2f}'
+                        confidence = 0.75
+                    elif current_price > latest_short > latest_long:
+                        # Bullish trend
+                        suggested_buy = max(recent_low * 0.95, latest_short * 0.98)  # Support level
+                        suggested_sell = current_price * 1.15  # Extension of current trend
+                        action = 'BUY'
+                        reason = f'Bullish trend: Buy at support ${suggested_buy:.2f}, Sell at ${suggested_sell:.2f}'
+                        confidence = 0.65
+                    else:
+                        # Bearish/Neutral trend
+                        suggested_buy = recent_low * 0.90  # Wait for dip
+                        suggested_sell = current_price * 1.05  # Small profit target
+                        action = 'SELL'
+                        reason = f'Bearish trend: Buy at dip ${suggested_buy:.2f}, Sell at resistance ${suggested_sell:.2f}'
+                        confidence = 0.60
+                        
+                except Exception as e:
+                    print(f"Error in technical analysis for {ticker}: {e}")
+                    # Fallback to simple suggestions
+                    suggested_buy = current_price * 0.95
+                    suggested_sell = current_price * 1.10
+                    action = 'BUY'
+                    reason = f'Technical analysis: Buy at ${suggested_buy:.2f}, Sell at ${suggested_sell:.2f}'
+                    confidence = 0.50
+            
+            # Always return with action and specific price suggestions
+            result = {
+                'action': action,
+                'reason': reason,
+                'confidence': confidence,
+                'strategy': 'watchlist_technical',
+                'suggested_buy_price': suggested_buy,
+                'suggested_sell_price': suggested_sell
+            }
+            
+            return result
+        
+        # Default watch recommendation when targets exist but not reached
+        return {
+            'action': 'WATCH',
+            'reason': f'Monitoring: ${current_price:.2f} (Buy target: ${target_buy_price:.2f if target_buy_price else "Not set"}, Sell target: ${target_sell_price:.2f if target_sell_price else "Not set"})',
+            'confidence': 0.50,
+            'strategy': 'watchlist_monitor'
+        }
 
 # Global strategy instance
 strategy = TradingStrategy()
