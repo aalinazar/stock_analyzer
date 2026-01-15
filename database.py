@@ -264,7 +264,7 @@ class PortfolioDatabase:
                 cursor.execute('DELETE FROM portfolio_stocks WHERE id = ?', (portfolio_stock_id,))
             
             conn.commit()
-            return True, f"Successfully sold {shares_sold} shares of {stock_dict['ticker']}. Real profit: ${real_profit:.2f}"
+            return True, f"Successfully sold {shares_sold} shares of {stock_dict['ticker']}. Real profit: {real_profit:.2f}"
     
     def get_sales_history(self) -> List[Dict]:
         """Get all sales transactions"""
@@ -298,6 +298,64 @@ class PortfolioDatabase:
             cursor.execute('SELECT SUM(real_profit) FROM sales_transactions')
             result = cursor.fetchone()
             return result[0] if result[0] else 0.0
+    
+    def update_sales_transaction(self, sale_id: int, shares_sold: float = None, 
+                                sell_price: float = None, sell_date: str = None,
+                                tax_fee: float = None) -> Tuple[bool, str]:
+        """Update a sales transaction"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # Get the original sale transaction
+            cursor.execute('SELECT * FROM sales_transactions WHERE id = ?', (sale_id,))
+            sale = cursor.fetchone()
+            
+            if not sale:
+                return False, "Sales transaction not found"
+            
+            sale_dict = dict(sale)
+            
+            # Use original values if new ones not provided
+            new_shares_sold = shares_sold if shares_sold is not None else sale_dict['shares_sold']
+            new_sell_price = sell_price if sell_price is not None else sale_dict['sell_price']
+            new_sell_date = sell_date if sell_date is not None else sale_dict['sell_date']
+            new_tax_fee = tax_fee if tax_fee is not None else sale_dict['tax_fee']
+            
+            # Calculate new real profit
+            purchase_cost = new_shares_sold * sale_dict['purchase_price']
+            sell_revenue = new_shares_sold * new_sell_price
+            new_real_profit = sell_revenue - purchase_cost - new_tax_fee
+            
+            # Update the sales transaction
+            cursor.execute('''
+                UPDATE sales_transactions 
+                SET shares_sold = ?, sell_price = ?, sell_date = ?, 
+                    tax_fee = ?, real_profit = ?
+                WHERE id = ?
+            ''', (new_shares_sold, new_sell_price, new_sell_date, 
+                  new_tax_fee, new_real_profit, sale_id))
+            
+            updated = cursor.rowcount > 0
+            conn.commit()
+            
+            if updated:
+                return True, f"Sales transaction updated successfully. New real profit: {new_real_profit:.2f}"
+            else:
+                return False, "Failed to update sales transaction"
+    
+    def delete_sales_transaction(self, sale_id: int) -> Tuple[bool, str]:
+        """Delete a sales transaction"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM sales_transactions WHERE id = ?', (sale_id,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            
+            if deleted:
+                return True, "Sales transaction deleted successfully"
+            else:
+                return False, "Sales transaction not found or already deleted"
     
     def export_portfolio_to_csv(self) -> str:
         """Export portfolio data to CSV format"""
