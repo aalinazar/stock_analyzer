@@ -1412,15 +1412,46 @@ elif page == "Edit Watchlist":
                 if ai_suggested_buy or ai_suggested_sell:
                     st.subheader("🤖 AI-Recommended Target Prices")
                     
-                    if ai_suggested_buy and ai_suggested_sell:
-                        col1, col2 = st.columns(2)
-                        with col1:
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if ai_suggested_buy:
                             st.metric("AI Buy Target", f"${ai_suggested_buy:.2f}")
-                        with col2:
+                            if st.button("🚀 Apply AI Buy Target", key=f"apply_ai_buy_{selected_stock['ticker']}", type="primary"):
+                                success = db.update_watchlist_stock(
+                                    ticker=selected_stock['ticker'],
+                                    target_buy_price=ai_suggested_buy,
+                                    status="ready_to_buy"
+                                )
+                                if success:
+                                    st.success("✅ AI-recommended buy target applied successfully!")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Failed to apply AI buy target")
+                        else:
+                            st.write("*No AI buy suggestion available*")
+                    
+                    with col2:
+                        if ai_suggested_sell:
                             st.metric("AI Sell Target", f"${ai_suggested_sell:.2f}")
-                        
-                        # Apply AI suggestions button
-                        if st.button("🚀 Apply AI Target Prices", key=f"apply_ai_targets_{selected_stock['ticker']}", type="primary"):
+                            if st.button("🚀 Apply AI Sell Target", key=f"apply_ai_sell_{selected_stock['ticker']}", type="primary"):
+                                success = db.update_watchlist_stock(
+                                    ticker=selected_stock['ticker'],
+                                    target_sell_price=ai_suggested_sell,
+                                    status="ready_to_sell"
+                                )
+                                if success:
+                                    st.success("✅ AI-recommended sell target applied successfully!")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Failed to apply AI sell target")
+                        else:
+                            st.write("*No AI sell suggestion available*")
+                    
+                    # Apply both button if both are available
+                    if ai_suggested_buy and ai_suggested_sell:
+                        st.markdown("---")
+                        if st.button("🚀 Apply Both AI Target Prices", key=f"apply_ai_targets_{selected_stock['ticker']}", type="primary"):
                             success = db.update_watchlist_stock(
                                 ticker=selected_stock['ticker'],
                                 target_buy_price=ai_suggested_buy,
@@ -1428,40 +1459,10 @@ elif page == "Edit Watchlist":
                                 status="watching"
                             )
                             if success:
-                                st.success("✅ AI-recommended target prices applied successfully!")
+                                st.success("✅ Both AI-recommended target prices applied successfully!")
                                 st.rerun()
                             else:
                                 st.error("❌ Failed to apply AI target prices")
-                    
-                    elif ai_suggested_buy:
-                        st.metric("AI Buy Target", f"${ai_suggested_buy:.2f}")
-                        
-                        if st.button("🚀 Apply AI Buy Target", key=f"apply_ai_buy_{selected_stock['ticker']}", type="primary"):
-                            success = db.update_watchlist_stock(
-                                ticker=selected_stock['ticker'],
-                                target_buy_price=ai_suggested_buy,
-                                status="ready_to_buy"
-                            )
-                            if success:
-                                st.success("✅ AI-recommended buy target applied successfully!")
-                                st.rerun()
-                            else:
-                                st.error("❌ Failed to apply AI buy target")
-                    
-                    elif ai_suggested_sell:
-                        st.metric("AI Sell Target", f"${ai_suggested_sell:.2f}")
-                        
-                        if st.button("🚀 Apply AI Sell Target", key=f"apply_ai_sell_{selected_stock['ticker']}", type="primary"):
-                            success = db.update_watchlist_stock(
-                                ticker=selected_stock['ticker'],
-                                target_sell_price=ai_suggested_sell,
-                                status="ready_to_sell"
-                            )
-                            if success:
-                                st.success("✅ AI-recommended sell target applied successfully!")
-                                st.rerun()
-                            else:
-                                st.error("❌ Failed to apply AI sell target")
                 
                 # Fallback suggested target prices based on recommendation action
                 if recommendation['action'] in ['BUY', 'SELL']:

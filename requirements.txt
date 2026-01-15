@@ -2,3 +2,4 @@ streamlit==1.52.2
 yfinance==1.0
 pandas==2.3.3
 numpy==1.24.3
+pytest==7.4.3

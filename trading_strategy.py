@@ -369,8 +369,90 @@ class TradingStrategy:
                                     notes: str = None) -> Dict:
         """Get recommendation for a watchlist stock based on target prices"""
         
-        # Check if buy target is reached
-        if target_buy_price and current_price <= target_buy_price:
+        # Validate price scale to avoid currency/decimal mismatches
+        def validate_price_scale(current: float, target: float) -> bool:
+            """Check if current price and target are in similar scale (within reasonable factor)"""
+            if not target or target <= 0:
+                return False
+            
+            # Check if prices are in same order of magnitude or within reasonable factor
+            ratio = current / target
+            
+            # If ratio > 10 or < 0.1, likely scale mismatch (different currency or decimal error)
+            if ratio > 10 or ratio < 0.1:
+                return False
+            return True
+        
+        # Validate target prices before comparison
+        buy_target_valid = False
+        sell_target_valid = False
+        
+        if target_buy_price:
+            buy_target_valid = validate_price_scale(current_price, target_buy_price)
+            if not buy_target_valid:
+                # Log the scale mismatch issue
+                print(f"Price scale mismatch detected for {ticker}: Current={current_price:.2f}, Target Buy={target_buy_price:.2f}")
+        
+        if target_sell_price:
+            sell_target_valid = validate_price_scale(current_price, target_sell_price)
+            if not sell_target_valid:
+                # Log the scale mismatch issue
+                print(f"Price scale mismatch detected for {ticker}: Current={current_price:.2f}, Target Sell={target_sell_price:.2f}")
+        
+        # If price scales don't match, provide AI recommendations based on current price scale
+        if (target_buy_price and not buy_target_valid) or (target_sell_price and not sell_target_valid):
+            # Generate intelligent buy/sell recommendations based on current price scale
+            suggested_buy = current_price * 0.95  # 5% below current price
+            suggested_sell = current_price * 1.15  # 15% above current price
+            
+            # Adjust based on technical analysis if possible
+            try:
+                hist_data = self.get_historical_data(ticker)
+                if not hist_data.empty and len(hist_data) >= 20:
+                    # Use technical indicators to refine recommendations
+                    recent_high = hist_data['High'].tail(20).max()
+                    recent_low = hist_data['Low'].tail(20).min()
+                    
+                    # More intelligent price targets based on recent range
+                    suggested_buy = max(recent_low * 0.98, current_price * 0.95)  # Support level or 5% below
+                    suggested_sell = min(recent_high * 1.02, current_price * 1.15)  # Resistance level or 15% above
+                    
+                    # Determine action based on current position in range
+                    price_position = (current_price - recent_low) / (recent_high - recent_low)
+                    
+                    if price_position < 0.3:  # Near bottom of range - good buying opportunity
+                        action = 'BUY'
+                        confidence = 0.75
+                        reason = f'Price near support level. AI recommends Buy at ${suggested_buy:.2f}, Target sell at ${suggested_sell:.2f} based on technical analysis.'
+                    elif price_position > 0.7:  # Near top of range - consider selling
+                        action = 'SELL'
+                        confidence = 0.70
+                        reason = f'Price near resistance level. AI recommends taking profits at ${suggested_sell:.2f}, or Buy on dip at ${suggested_buy:.2f}.'
+                    else:  # Middle range - hold or wait
+                        action = 'HOLD'
+                        confidence = 0.60
+                        reason = f'Price in middle range. AI suggests Buy at ${suggested_buy:.2f} on dips, Sell at ${suggested_sell:.2f} on rallies.'
+                else:
+                    action = 'BUY'
+                    confidence = 0.65
+                    reason = f'AI analysis: Good entry point. Buy at ${suggested_buy:.2f}, Target sell at ${suggested_sell:.2f} for healthy profit.'
+                    
+            except Exception:
+                action = 'BUY'
+                confidence = 0.60
+                reason = f'AI recommendation based on current price action: Buy at ${suggested_buy:.2f}, Sell at ${suggested_sell:.2f}'
+            
+            return {
+                'action': action,
+                'reason': reason,
+                'confidence': confidence,
+                'strategy': 'ai_price_recommendation',
+                'suggested_buy_price': suggested_buy,
+                'suggested_sell_price': suggested_sell
+            }
+        
+        # Only proceed with target-based recommendations if scales are valid
+        if buy_target_valid and current_price <= target_buy_price:
             return {
                 'action': 'BUY',
                 'reason': f'Target buy price reached: ${current_price:.2f} ≤ ${target_buy_price:.2f}',
@@ -379,7 +461,7 @@ class TradingStrategy:
             }
         
         # Check if sell target is reached (for stocks we might already own or are monitoring)
-        if target_sell_price and current_price >= target_sell_price:
+        if sell_target_valid and current_price >= target_sell_price:
             return {
                 'action': 'SELL',
                 'reason': f'Target sell price reached: ${current_price:.2f} ≥ ${target_sell_price:.2f}',
@@ -387,8 +469,8 @@ class TradingStrategy:
                 'strategy': 'watchlist_target'
             }
         
-        # Provide proximity recommendations
-        if target_buy_price:
+        # Provide proximity recommendations only if scales are valid
+        if buy_target_valid and target_buy_price:
             buy_proximity = (current_price - target_buy_price) / target_buy_price * 100
             if -5 <= buy_proximity <= 10:  # Within 5% below to 10% above target
                 return {
@@ -398,7 +480,7 @@ class TradingStrategy:
                     'strategy': 'watchlist_proximity'
                 }
         
-        if target_sell_price:
+        if sell_target_valid and target_sell_price:
             sell_proximity = (current_price - target_sell_price) / target_sell_price * 100
             if -10 <= sell_proximity <= 5:  # Within 10% below to 5% above target
                 return {
@@ -495,9 +577,12 @@ class TradingStrategy:
             return result
         
         # Default watch recommendation when targets exist but not reached
+        buy_target_str = f"${target_buy_price:.2f}" if target_buy_price else "Not set"
+        sell_target_str = f"${target_sell_price:.2f}" if target_sell_price else "Not set"
+        
         return {
             'action': 'WATCH',
-            'reason': f'Monitoring: ${current_price:.2f} (Buy target: ${target_buy_price:.2f if target_buy_price else "Not set"}, Sell target: ${target_sell_price:.2f if target_sell_price else "Not set"})',
+            'reason': f'Monitoring: ${current_price:.2f} (Buy target: {buy_target_str}, Sell target: {sell_target_str})',
             'confidence': 0.50,
             'strategy': 'watchlist_monitor'
         }
