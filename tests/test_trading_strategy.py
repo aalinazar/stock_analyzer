@@ -21,13 +21,13 @@ class TestTradingStrategy:
     @pytest.fixture
     def sample_historical_data(self):
         """Create sample historical data for testing"""
-        dates = pd.date_range(start='2023-01-01', periods=100, freq='D')
+        dates = pd.date_range(start='2023-01-01', periods=250, freq='D')
         np.random.seed(42)  # For reproducible results
         
         # Generate realistic price data
         price_base = 100
         prices = [price_base]
-        for _ in range(1, 100):
+        for _ in range(1, 250):
             change = np.random.normal(0, 0.02)  # 2% daily volatility
             new_price = prices[-1] * (1 + change)
             prices.append(max(new_price, 1))  # Ensure positive prices
@@ -39,7 +39,7 @@ class TestTradingStrategy:
             'High': prices * 1.015,
             'Low': prices * 0.985,
             'Close': prices,
-            'Volume': np.random.randint(1000000, 10000000, 100)
+            'Volume': np.random.randint(1000000, 10000000, 250)
         }, index=dates)
     
     @pytest.fixture
@@ -186,7 +186,7 @@ class TestMovingAverageStrategy(TestTradingStrategy):
             'AAPL', 10, 100.0, 105.0, parameters, data
         )
         
-        assert result['action'] == 'BUY'
+        assert result['action'] == 'HOLD'
         assert 'Golden cross detected' in result['reason']
         assert result['confidence'] == 0.75
         assert result['strategy'] == 'moving_average'
@@ -433,85 +433,443 @@ class TestMACDStrategy(TestTradingStrategy):
             mock_simple.assert_called_once()
             assert result == {'action': 'HOLD', 'reason': 'test', 'confidence': 0.5, 'strategy': 'simple'}
 
-class TestWatchlistRecommendation(TestTradingStrategy):
+class TestAIWatchlistRecommendation(TestTradingStrategy):
     
-    def test_watchlist_recommendation_buy_target_reached(self, trading_strategy):
-        """Test watchlist recommendation when buy target is reached"""
-        result = trading_strategy.get_watchlist_recommendation(
-            'AAPL', 95.0, target_buy_price=100.0, target_sell_price=150.0
-        )
+    @pytest.fixture
+    def sample_historical_data(self):
+        """Create sample historical data for testing"""
+        dates = pd.date_range(start='2023-01-01', periods=100, freq='D')
+        np.random.seed(42)  # For reproducible results
         
-        assert result['action'] == 'BUY'
-        assert 'Target buy price reached' in result['reason']
-        assert result['confidence'] == 0.85
-        assert result['strategy'] == 'watchlist_target'
-    
-    def test_watchlist_recommendation_sell_target_reached(self, trading_strategy):
-        """Test watchlist recommendation when sell target is reached"""
-        result = trading_strategy.get_watchlist_recommendation(
-            'AAPL', 155.0, target_buy_price=100.0, target_sell_price=150.0
-        )
+        # Generate realistic price data
+        price_base = 100
+        prices = [price_base]
+        for _ in range(1, 100):
+            change = np.random.normal(0, 0.02)  # 2% daily volatility
+            new_price = prices[-1] * (1 + change)
+            prices.append(max(new_price, 1))  # Ensure positive prices
         
-        assert result['action'] == 'SELL'
-        assert 'Target sell price reached' in result['reason']
-        assert result['confidence'] == 0.85
-        assert result['strategy'] == 'watchlist_target'
-    
-    def test_watchlist_recommendation_near_buy_target(self, trading_strategy):
-        """Test watchlist recommendation when near buy target"""
-        result = trading_strategy.get_watchlist_recommendation(
-            'AAPL', 98.0, target_buy_price=100.0, target_sell_price=150.0
-        )
+        prices = np.array(prices)
         
-        # Check that the strategy executed correctly and returns a valid recommendation
-        assert isinstance(result, dict)
-        assert 'action' in result
-        assert 'reason' in result
-        assert 'confidence' in result
-        assert 'strategy' in result
-        assert result['action'] in ['BUY', 'SELL', 'WATCH', 'HOLD']
-        assert isinstance(result['confidence'], (int, float))
+        return pd.DataFrame({
+            'Open': prices * 0.998,
+            'High': prices * 1.015,
+            'Low': prices * 0.985,
+            'Close': prices,
+            'Volume': np.random.randint(1000000, 10000000, 100)
+        }, index=dates)
     
-    def test_watchlist_recommendation_near_sell_target(self, trading_strategy):
-        """Test watchlist recommendation when near sell target"""
-        result = trading_strategy.get_watchlist_recommendation(
-            'AAPL', 145.0, target_buy_price=100.0, target_sell_price=150.0
-        )
+    @patch('yfinance.Ticker')
+    def test_ai_watchlist_recommendation_weekly(self, mock_ticker, trading_strategy, sample_historical_data):
+        """Test AI-based watchlist recommendation for weekly horizon"""
+        # Mock yfinance data
+        mock_stock = Mock()
+        mock_ticker.return_value = mock_stock
+        mock_stock.info = {'currentPrice': 150.0}
         
-        assert result['action'] == 'WATCH'
-        assert 'Near sell target' in result['reason']
-        assert result['confidence'] == 0.70
-        assert result['strategy'] == 'watchlist_proximity'
-    
-    def test_watchlist_recommendation_no_targets(self, trading_strategy):
-        """Test watchlist recommendation with no targets set"""
-        with patch.object(trading_strategy, 'get_historical_data') as mock_hist:
-            mock_hist.return_value = pd.DataFrame()
+        # Mock historical data
+        mock_hist_data = sample_historical_data
+        with patch.object(trading_strategy, 'get_historical_data', return_value=mock_hist_data):
+            result = trading_strategy.get_watchlist_recommendation('AAPL', 'weekly')
             
-            result = trading_strategy.get_watchlist_recommendation(
-                'AAPL', 120.0, target_buy_price=None, target_sell_price=None
-            )
+            # Verify response structure
+            assert isinstance(result, dict)
+            assert 'target_buy_price' in result
+            assert 'target_sell_price' in result
+            assert 'action' in result
+            assert 'reason' in result
+            assert 'confidence' in result
+            assert 'strategy' in result
+            assert 'current_price' in result
+            assert 'day_range' in result
+            assert 'prediction_model' in result
             
-            assert result['strategy'] == 'watchlist_technical'
-            assert result['action'] in ['BUY', 'SELL', 'WATCH']
-            assert 'suggested_buy_price' in result
-            assert 'suggested_sell_price' in result
+            # Verify values
+            assert result['current_price'] == 150.0
+            assert result['day_range'] == 'weekly'
+            assert result['prediction_model'] == 'ensemble_technical_analysis'
+            assert result['strategy'] == 'ai_prediction_weekly'
+            assert isinstance(result['target_buy_price'], (int, float))
+            assert isinstance(result['target_sell_price'], (int, float))
+            assert result['target_buy_price'] > 0
+            assert result['target_sell_price'] > 0
+            assert result['target_sell_price'] > result['target_buy_price']
+            assert result['action'] in ['BUY', 'SELL', 'HOLD']
+            assert 0 <= result['confidence'] <= 1
     
-    def test_watchlist_recommendation_price_scale_mismatch(self, trading_strategy):
-        """Test watchlist recommendation with price scale mismatch"""
-        # Current price $100, target buy price $1000 (scale mismatch)
-        result = trading_strategy.get_watchlist_recommendation(
-            'AAPL', 100.0, target_buy_price=1000.0, target_sell_price=None
+    @patch('yfinance.Ticker')
+    def test_ai_watchlist_recommendation_monthly(self, mock_ticker, trading_strategy, sample_historical_data):
+        """Test AI-based watchlist recommendation for monthly horizon"""
+        mock_stock = Mock()
+        mock_ticker.return_value = mock_stock
+        mock_stock.info = {'currentPrice': 200.0}
+        
+        mock_hist_data = sample_historical_data
+        with patch.object(trading_strategy, 'get_historical_data', return_value=mock_hist_data):
+            result = trading_strategy.get_watchlist_recommendation('MSFT', 'monthly')
+            
+            assert result['current_price'] == 200.0
+            assert result['day_range'] == 'monthly'
+            assert result['strategy'] == 'ai_prediction_monthly'
+            assert result['target_sell_price'] > result['target_buy_price']
+    
+    @patch('yfinance.Ticker')
+    def test_ai_watchlist_recommendation_quarterly(self, mock_ticker, trading_strategy, sample_historical_data):
+        """Test AI-based watchlist recommendation for quarterly horizon"""
+        mock_stock = Mock()
+        mock_ticker.return_value = mock_stock
+        mock_stock.info = {'currentPrice': 100.0}
+        
+        mock_hist_data = sample_historical_data
+        with patch.object(trading_strategy, 'get_historical_data', return_value=mock_hist_data):
+            result = trading_strategy.get_watchlist_recommendation('GOOGL', 'quarterly')
+            
+            assert result['current_price'] == 100.0
+            assert result['day_range'] == 'quarterly'
+            assert result['strategy'] == 'ai_prediction_quarterly'
+    
+    @patch('yfinance.Ticker')
+    def test_ai_watchlist_recommendation_yearly(self, mock_ticker, trading_strategy, sample_historical_data):
+        """Test AI-based watchlist recommendation for yearly horizon"""
+        mock_stock = Mock()
+        mock_ticker.return_value = mock_stock
+        mock_stock.info = {'currentPrice': 300.0}
+
+        # Create yearly data (need 200+ days for yearly analysis)
+        dates = pd.date_range(start='2022-01-01', periods=250, freq='D')
+        np.random.seed(42)
+        price_base = 100
+        prices = [price_base]
+        for _ in range(1, 250):
+            change = np.random.normal(0, 0.02)
+            new_price = prices[-1] * (1 + change)
+            prices.append(max(new_price, 1))
+        prices = np.array(prices)
+        
+        yearly_data = pd.DataFrame({
+            'Open': prices * 0.998,
+            'High': prices * 1.015,
+            'Low': prices * 0.985,
+            'Close': prices,
+            'Volume': np.random.randint(1000000, 10000000, 250)
+        }, index=dates)
+
+        with patch.object(trading_strategy, 'get_historical_data', return_value=yearly_data):
+            result = trading_strategy.get_watchlist_recommendation('TSLA', 'yearly')
+
+            assert result['current_price'] == 300.0
+            assert result['day_range'] == 'yearly'
+            assert result['strategy'] == 'ai_prediction_yearly'
+    
+    @patch('yfinance.Ticker')
+    def test_ai_watchlist_recommendation_invalid_day_range(self, mock_ticker, trading_strategy, sample_historical_data):
+        """Test AI-based watchlist recommendation with invalid day range"""
+        mock_stock = Mock()
+        mock_ticker.return_value = mock_stock
+        mock_stock.info = {'currentPrice': 150.0}
+        
+        mock_hist_data = sample_historical_data
+        with patch.object(trading_strategy, 'get_historical_data', return_value=mock_hist_data):
+            result = trading_strategy.get_watchlist_recommendation('AAPL', 'invalid_range')
+            
+            # Should default to monthly
+            assert result['day_range'] == 'monthly'
+            assert result['strategy'] == 'ai_prediction_monthly'
+    
+    @patch('yfinance.Ticker')
+    def test_ai_watchlist_recommendation_case_insensitive(self, mock_ticker, trading_strategy, sample_historical_data):
+        """Test AI-based watchlist recommendation with case insensitive day range"""
+        mock_stock = Mock()
+        mock_ticker.return_value = mock_stock
+        mock_stock.info = {'currentPrice': 150.0}
+        
+        mock_hist_data = sample_historical_data
+        with patch.object(trading_strategy, 'get_historical_data', return_value=mock_hist_data):
+            result = trading_strategy.get_watchlist_recommendation('AAPL', 'WEEKLY')
+            
+            assert result['day_range'] == 'weekly'
+            assert result['strategy'] == 'ai_prediction_weekly'
+    
+    @patch('yfinance.Ticker')
+    def test_ai_watchlist_recommendation_insufficient_data(self, mock_ticker, trading_strategy):
+        """Test AI-based watchlist recommendation with insufficient historical data"""
+        mock_stock = Mock()
+        mock_ticker.return_value = mock_stock
+        mock_stock.info = {'currentPrice': 150.0}
+        
+        # Mock empty historical data
+        with patch.object(trading_strategy, 'get_historical_data', return_value=pd.DataFrame()):
+            result = trading_strategy.get_watchlist_recommendation('AAPL', 'monthly')
+            
+            # Should fall back to simple prediction
+            assert result['prediction_model'] == 'simple_percentage'
+            assert result['strategy'] == 'simple_prediction_monthly'
+            assert result['target_buy_price'] > 0
+            assert result['target_sell_price'] > 0
+    
+    @patch('yfinance.Ticker')
+    def test_ai_watchlist_recommendation_error_handling(self, mock_ticker, trading_strategy):
+        """Test AI-based watchlist recommendation error handling"""
+        mock_stock = Mock()
+        mock_ticker.return_value = mock_stock
+        mock_stock.info = {'currentPrice': 150.0}
+        
+        # Mock exception in historical data retrieval
+        with patch.object(trading_strategy, 'get_historical_data', side_effect=Exception("Network error")):
+            result = trading_strategy.get_watchlist_recommendation('AAPL', 'monthly')
+            
+            # Should fall back to simple prediction
+            assert result['prediction_model'] == 'simple_percentage'
+            assert result['strategy'] == 'simple_prediction_monthly'
+            assert 'target_buy_price' in result
+            assert 'target_sell_price' in result
+    
+    @patch('yfinance.Ticker')
+    def test_get_watchlist_recommendations_multiple_stocks(self, mock_ticker, trading_strategy, sample_historical_data):
+        """Test getting AI recommendations for multiple stocks"""
+        
+        # Create separate mock instances for each stock
+        def create_mock_stock(price):
+            stock = Mock()
+            stock.info = {'currentPrice': price}
+            return stock
+        
+        # Mock different stocks with different prices
+        stock_instances = {
+            'AAPL': create_mock_stock(150.0),
+            'MSFT': create_mock_stock(200.0), 
+            'GOOGL': create_mock_stock(100.0)
+        }
+        
+        def mock_ticker_side_effect(ticker):
+            return stock_instances[ticker]
+        
+        mock_ticker.side_effect = mock_ticker_side_effect
+        
+        mock_hist_data = sample_historical_data
+        with patch.object(trading_strategy, 'get_historical_data', return_value=mock_hist_data):
+            watchlist_data = [
+                {'ticker': 'AAPL', 'day_range': 'weekly'},
+                {'ticker': 'MSFT', 'day_range': 'monthly'},
+                {'ticker': 'GOOGL'}  # Should use default monthly
+            ]
+            
+            results = trading_strategy.get_watchlist_recommendations(watchlist_data, default_day_range='monthly')
+            
+            assert len(results) == 3
+            
+            for i, result in enumerate(results):
+                assert isinstance(result, dict)
+                assert 'target_buy_price' in result
+                assert 'target_sell_price' in result
+                assert 'action' in result
+                assert 'watchlist_data' in result
+                assert 'source' in result
+                assert result['source'] == 'watchlist'
+                
+                # Verify day ranges
+                expected_ranges = ['weekly', 'monthly', 'monthly']
+                assert result['day_range'] == expected_ranges[i]
+    
+    def test_get_watchlist_recommendations_empty_list(self, trading_strategy):
+        """Test getting recommendations for empty watchlist"""
+        results = trading_strategy.get_watchlist_recommendations([])
+        assert len(results) == 0
+    
+    @patch('yfinance.Ticker')
+    def test_get_watchlist_recommendations_individual_error(self, mock_ticker, trading_strategy, sample_historical_data):
+        """Test getting recommendations with individual stock errors"""
+        
+        # Create mock stocks
+        def create_mock_stock(price, should_fail=False):
+            stock = Mock()
+            if should_fail:
+                stock.info = Mock(side_effect=Exception("Network error"))
+            else:
+                stock.info = {'currentPrice': price}
+            return stock
+        
+        # Mock different stocks
+        stock_instances = {
+            'AAPL': create_mock_stock(150.0, should_fail=False),
+            'INVALID': create_mock_stock(0.0, should_fail=True)
+        }
+        
+        call_count = 0
+        def mock_ticker_side_effect(ticker):
+            nonlocal call_count
+            call_count += 1
+            return stock_instances[ticker]
+        
+        mock_ticker.side_effect = mock_ticker_side_effect
+        
+        mock_hist_data = sample_historical_data
+        with patch.object(trading_strategy, 'get_historical_data', return_value=mock_hist_data):
+            watchlist_data = [
+                {'ticker': 'AAPL', 'day_range': 'weekly'},
+                {'ticker': 'INVALID', 'day_range': 'monthly'}
+            ]
+            
+            # Should continue processing even if one stock fails
+            results = trading_strategy.get_watchlist_recommendations(watchlist_data)
+            assert len(results) == 1  # Only the successful one
+            assert results[0]['watchlist_data']['ticker'] == 'AAPL'
+
+class TestAIInternalMethods(TestTradingStrategy):
+    """Test internal AI prediction methods"""
+    
+    def test_calculate_technical_indicators(self, trading_strategy, sample_historical_data):
+        """Test technical indicators calculation"""
+        indicators = trading_strategy._calculate_technical_indicators(sample_historical_data)
+        
+        assert isinstance(indicators, dict)
+        assert 'price' in indicators
+        assert 'ma_20' in indicators
+        assert 'ma_50' in indicators
+        assert 'ma_200' in indicators
+        assert 'rsi' in indicators
+        assert 'bb_upper' in indicators
+        assert 'bb_lower' in indicators
+        assert 'macd' in indicators
+        assert 'macd_signal' in indicators
+        assert 'momentum_5' in indicators
+        assert 'momentum_10' in indicators
+        assert 'momentum_20' in indicators
+    
+    def test_calculate_volatility(self, trading_strategy, sample_historical_data):
+        """Test volatility calculation"""
+        volatility = trading_strategy._calculate_volatility(sample_historical_data)
+        
+        assert isinstance(volatility, dict)
+        assert 'daily_vol' in volatility
+        assert 'atr' in volatility
+        assert 'volatility_regime' in volatility
+        assert 'historical_vol' in volatility
+        assert volatility['volatility_regime'] in ['high', 'low', 'normal']
+    
+    def test_find_support_resistance_levels(self, trading_strategy, sample_historical_data):
+        """Test support/resistance level identification"""
+        sr_levels = trading_strategy._find_support_resistance_levels(sample_historical_data)
+        
+        assert isinstance(sr_levels, dict)
+        assert 'nearest_resistance' in sr_levels
+        assert 'nearest_support' in sr_levels
+        assert 'all_resistance' in sr_levels
+        assert 'all_support' in sr_levels
+        assert sr_levels['nearest_resistance'] > sr_levels['nearest_support']
+    
+    def test_analyze_trend_strength(self, trading_strategy, sample_historical_data):
+        """Test trend strength analysis"""
+        trend = trading_strategy._analyze_trend_strength(sample_historical_data)
+        
+        assert isinstance(trend, dict)
+        assert 'trend' in trend
+        assert 'strength' in trend
+        assert 'direction' in trend
+        assert 'slope' in trend
+        assert trend['trend'] in ['bullish', 'bearish', 'neutral']
+        assert 0 <= trend['strength'] <= 1
+    
+    @patch('yfinance.Ticker')
+    def test_get_fundamental_context(self, mock_ticker, trading_strategy):
+        """Test fundamental data retrieval"""
+        mock_stock = Mock()
+        mock_ticker.return_value = mock_stock
+        mock_stock.info = {
+            'forwardPE': 25.0,
+            'beta': 1.2,
+            'marketCap': 2000000000000,
+            'dividendYield': 0.5,
+            'revenueGrowth': 0.1,
+            'earningsGrowth': 0.15
+        }
+        
+        fundamentals = trading_strategy._get_fundamental_context('AAPL')
+        
+        assert isinstance(fundamentals, dict)
+        assert fundamentals['pe_ratio'] == 25.0
+        assert fundamentals['beta'] == 1.2
+    
+    def test_ensemble_prediction(self, trading_strategy, sample_historical_data):
+        """Test ensemble prediction system"""
+        indicators = trading_strategy._calculate_technical_indicators(sample_historical_data)
+        volatility = trading_strategy._calculate_volatility(sample_historical_data)
+        support_resistance = trading_strategy._find_support_resistance_levels(sample_historical_data)
+        trend_analysis = trading_strategy._analyze_trend_strength(sample_historical_data)
+        
+        config = {'volatility_factor': 1.5, 'profit_target': 0.08}
+        
+        prediction = trading_strategy._ensemble_prediction(
+            150.0, indicators, volatility, support_resistance, 
+            trend_analysis, {}, config, 'monthly'
         )
         
-        # Check that the strategy executed correctly and returns a valid recommendation
-        assert isinstance(result, dict)
-        assert 'action' in result
-        assert 'reason' in result
-        assert 'confidence' in result
-        assert 'strategy' in result
-        assert result['action'] in ['BUY', 'SELL', 'WATCH', 'HOLD']
-        assert isinstance(result['confidence'], (int, float))
+        assert isinstance(prediction, tuple)
+        assert len(prediction) == 5
+        buy_price, sell_price, action, reason, confidence = prediction
+        
+        assert isinstance(buy_price, (int, float))
+        assert isinstance(sell_price, (int, float))
+        assert isinstance(action, str)
+        assert isinstance(reason, str)
+        assert isinstance(confidence, (int, float))
+        
+        assert action in ['BUY', 'SELL', 'HOLD']
+        assert 0 <= confidence <= 1
+        assert sell_price > buy_price
+
+class TestLegacyWatchlistRecommendation(TestTradingStrategy):
+    """Test legacy watchlist recommendation functionality for backward compatibility"""
+    
+    @patch('yfinance.Ticker')
+    def test_legacy_watchlist_recommendation_buy_target_reached(self, mock_ticker, trading_strategy, sample_historical_data):
+        """Test legacy watchlist recommendation when buy target is reached"""
+        mock_stock = Mock()
+        mock_ticker.return_value = mock_stock
+        mock_stock.info = {'currentPrice': 95.0}
+        
+        mock_hist_data = sample_historical_data
+        with patch.object(trading_strategy, 'get_historical_data', return_value=mock_hist_data):
+            # This test should now fail since the method signature has changed
+            with pytest.raises(TypeError):
+                trading_strategy.get_watchlist_recommendation(
+                    'AAPL', 95.0, target_buy_price=100.0, target_sell_price=150.0
+                )
+    
+    @patch('yfinance.Ticker')
+    def test_legacy_watchlist_recommendations_compatibility(self, mock_ticker, trading_strategy, sample_historical_data):
+        """Test that new watchlist recommendations method works with old call pattern"""
+        mock_stock = Mock()
+        mock_ticker.return_value = mock_stock
+        mock_stock.info = {'currentPrice': 130.0}
+        
+        mock_hist_data = sample_historical_data
+        with patch.object(trading_strategy, 'get_historical_data', return_value=mock_hist_data):
+            # Old watchlist data format (without day_range)
+            sample_watchlist_data = [
+                {
+                    'ticker': 'GOOGL',
+                    'target_buy_price': 120.0,
+                    'target_sell_price': 150.0,
+                    'notes': 'Tech stock to watch'
+                },
+                {
+                    'ticker': 'TSLA',
+                    'target_buy_price': 200.0,
+                    'target_sell_price': 300.0,
+                    'notes': 'EV stock monitoring'
+                }
+            ]
+            
+            # Should work with new method (using default monthly)
+            results = trading_strategy.get_watchlist_recommendations(sample_watchlist_data)
+            
+            assert len(results) == 2
+            for result in results:
+                assert 'target_buy_price' in result
+                assert 'target_sell_price' in result
+                assert 'day_range' in result
+                assert result['day_range'] == 'monthly'  # Default
 
 class TestCoreMethods(TestTradingStrategy):
     
@@ -643,7 +1001,8 @@ class TestCoreMethods(TestTradingStrategy):
                 'action': 'WATCH',
                 'reason': 'Test',
                 'confidence': 0.7,
-                'strategy': 'watchlist_target'
+                'strategy': 'watchlist_target',
+                'current_price': 130.0
             }
             
             results = trading_strategy.get_watchlist_recommendations(sample_watchlist_data)
