@@ -19,19 +19,64 @@ st.write("Track your stock investments, purchase details, and get AI-powered tra
 
 # Sidebar for navigation
 st.sidebar.title("📈 Portfolio Management")
-page = st.sidebar.selectbox("Choose a page", [
-    "Portfolio Overview", 
-    "Add Stock", 
-    "Edit Portfolio",
-    "Sell Stock",
-    "Sales History",
-    "Trading Strategy", 
-    "Watchlist",
-    "Add to Watchlist",
-    "Edit Watchlist",
-    "Recommendations",
-    "Settings"
-])
+
+# Define navigation structure
+CATEGORIES = {
+    "Portfolio Management": [
+        "Portfolio Overview", 
+        "Add Stock", 
+        "Edit Portfolio",
+        "Sell Stock",
+        "Sales History"
+    ],
+    "Watchlist Management": [
+        "Watchlist",
+        "Add to Watchlist",
+        "Edit Watchlist"
+    ],
+    "Analysis & Tools": [
+        "Trading Strategy",
+        "Recommendations"
+    ],
+    "Settings": [
+        "Settings"
+    ]
+}
+
+# Initialize session state for navigation
+if 'selected_category' not in st.session_state:
+    st.session_state.selected_category = "Portfolio Management"
+if 'selected_page' not in st.session_state:
+    st.session_state.selected_page = "Portfolio Overview"
+
+# Category dropdown
+def update_category():
+    # Reset selected page when category changes
+    if st.session_state.selected_category in CATEGORIES:
+        st.session_state.selected_page = CATEGORIES[st.session_state.selected_category][0]
+
+category = st.sidebar.selectbox(
+    "Choose a category",
+    list(CATEGORIES.keys()),
+    index=list(CATEGORIES.keys()).index(st.session_state.selected_category),
+    key="selected_category",
+    on_change=update_category
+)
+
+# Dynamic page dropdown based on selected category
+available_pages = CATEGORIES[category]
+page_index = available_pages.index(st.session_state.selected_page) if st.session_state.selected_page in available_pages else 0
+
+def update_page():
+    page = st.session_state.selected_page
+
+page = st.sidebar.selectbox(
+    "Choose a page",
+    available_pages,
+    index=page_index,
+    key="selected_page",
+    on_change=update_page
+)
 
 def load_portfolio():
     """Load portfolio from database and enrich with current data"""
