@@ -34,6 +34,7 @@ CATEGORIES = {
         "Watchlist",
         "Add to Watchlist",
         "Edit Watchlist",
+        "Import Watchlist from CSV",
         "Watchlist Recommendations"
     ],
     "Analysis & Tools": [
@@ -1713,6 +1714,197 @@ elif page == "Edit Watchlist":
                 
             except Exception as e:
                 st.error(f"Error getting recommendation: {str(e)}")
+
+# Import Watchlist from CSV Page
+elif page == "Import Watchlist from CSV":
+    st.header("📁 Import Watchlist from CSV")
+    
+    st.markdown("### 📋 CSV Format Requirements")
+    st.info("""
+    Your CSV file should contain the following columns:
+    - **ticker** (required): Stock ticker symbol (e.g., AAPL, GOOGL, MSFT)
+    - **target_buy_price** (optional): Target price to buy the stock
+    - **target_sell_price** (optional): Target price to sell the stock
+    - **notes** (optional): Your notes about the stock
+    - **status** (optional): Watch status (watching, ready_to_buy, ready_to_sell, paused)
+    """)
+    
+    # Template download
+    st.subheader("📄 Download Template")
+    
+    # Generate template dynamically
+    def generate_watchlist_template():
+        """Generate a CSV template with sample data"""
+        template_lines = ["ticker,target_buy_price,target_sell_price,notes,status"]
+        sample_data = [
+            ("AAPL", "150.00", "200.00", "Apple Inc - Strong fundamentals", "watching"),
+            ("GOOGL", "120.00", "180.00", "Alphabet - Good long term prospect", "ready_to_buy"),
+            ("MSFT", "300.00", "400.00", "Microsoft - Cloud growth story", "watching"),
+            ("TSLA", "200.00", "300.00", "Tesla - High volatility but potential", "paused")
+        ]
+        
+        for ticker, buy_price, sell_price, notes, status in sample_data:
+            template_lines.append(f"{ticker},{buy_price},{sell_price},{notes},{status}")
+        
+        return "\n".join(template_lines)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.download_button(
+            label="📥 Download CSV Template",
+            data=generate_watchlist_template(),
+            file_name="watchlist_template.csv",
+            mime="text/csv"
+        )
+    
+    st.markdown("---")
+    
+    # File upload section
+    st.subheader("📤 Upload CSV File")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        uploaded_file = st.file_uploader(
+            "Choose a CSV file",
+            type=['csv'],
+            help="Upload a CSV file containing watchlist data"
+        )
+    
+    with col2:
+        handle_duplicates = st.selectbox(
+            "Handle Duplicates",
+            ["skip", "update", "replace"],
+            index=0,
+            help="How to handle tickers already in your watchlist"
+        )
+        
+        validate_tickers = st.checkbox(
+            "Validate Tickers",
+            value=True,
+            help="Check if ticker symbols are valid using Yahoo Finance"
+        )
+    
+    if uploaded_file:
+        try:
+            # Read and preview the CSV
+            df = pd.read_csv(uploaded_file)
+            
+            st.subheader("👀 CSV Preview")
+            st.dataframe(df.head(10))
+            
+            # Show CSV info
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Rows", len(df))
+            with col2:
+                st.metric("Columns", len(df.columns))
+            with col3:
+                if 'ticker' in df.columns:
+                    unique_tickers = df['ticker'].nunique()
+                    st.metric("Unique Tickers", unique_tickers)
+                else:
+                    st.error("❌ Missing 'ticker' column!")
+            
+            # Check for required columns
+            required_columns = ['ticker']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            
+            if missing_columns:
+                st.error(f"❌ Missing required columns: {', '.join(missing_columns)}")
+                st.stop()
+            
+            # Check for existing tickers
+            if 'ticker' in df.columns:
+                existing_watchlist = db.get_watchlist()
+                existing_tickers = {stock['ticker'] for stock in existing_watchlist}
+                csv_tickers = set(df['ticker'].str.strip().str.upper())
+                duplicates = csv_tickers.intersection(existing_tickers)
+                
+                if duplicates and handle_duplicates != 'replace':
+                    st.warning(f"⚠️ {len(duplicates)} tickers already exist in your watchlist:")
+                    for ticker in sorted(duplicates):
+                        st.write(f"• {ticker}")
+                    
+                    if handle_duplicates == 'skip':
+                        st.info("These tickers will be skipped during import.")
+                    elif handle_duplicates == 'update':
+                        st.info("These tickers will be updated with new data.")
+            
+            # Import confirmation
+            st.markdown("---")
+            st.subheader("🚀 Import Confirmation")
+            
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                if st.button("⚡ Import Watchlist", type="primary", use_container_width=True):
+                    with st.spinner("🔄 Importing watchlist..."):
+                        # Reset file pointer for reading
+                        uploaded_file.seek(0)
+                        
+                        # Import the data
+                        results = db.import_watchlist_from_csv(
+                            csv_data=uploaded_file,
+                            handle_duplicates=handle_duplicates,
+                            validate_tickers=validate_tickers
+                        )
+                        
+                        # Display results
+                        st.subheader("📊 Import Results")
+                        
+                        # Summary metrics
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("✅ Successfully Imported", results['success_count'])
+                        with col2:
+                            st.metric("❌ Errors", results['error_count'])
+                        with col3:
+                            st.metric("⚠️ Warnings", len(results['warnings']))
+                        with col4:
+                            if handle_duplicates == 'skip':
+                                st.metric("⏭️ Skipped", len(results['skipped_stocks']))
+                            elif handle_duplicates == 'update':
+                                st.metric("🔄 Updated", len(results['updated_stocks']))
+                        
+                        # Detailed results
+                        if results['success_count'] > 0:
+                            st.success(f"🎉 Successfully imported {results['success_count']} stocks to watchlist!")
+                            
+                            if results['imported_stocks']:
+                                st.subheader("📥 Imported Stocks")
+                                for ticker in results['imported_stocks']:
+                                    st.write(f"✅ {ticker}")
+                            
+                            if results['updated_stocks']:
+                                st.subheader("🔄 Updated Stocks")
+                                for ticker in results['updated_stocks']:
+                                    st.write(f"🔄 {ticker}")
+                        
+                        if results['skipped_stocks']:
+                            st.subheader("⏭️ Skipped Stocks")
+                            for ticker in results['skipped_stocks']:
+                                st.write(f"⏭️ {ticker}")
+                        
+                        if results['warnings']:
+                            st.subheader("⚠️ Warnings")
+                            for warning in results['warnings']:
+                                st.warning(warning)
+                        
+                        if results['errors']:
+                            st.subheader("❌ Errors")
+                            for error in results['errors']:
+                                st.error(error)
+                        
+                        # Refresh button if successful
+                        if results['success_count'] > 0 and results['error_count'] == 0:
+                            st.markdown("---")
+                            if st.button("🔄 Go to Watchlist", use_container_width=True):
+                                st.session_state.selected_page = "Watchlist"
+                                st.rerun()
+        
+        except Exception as e:
+            st.error(f"❌ Error reading CSV file: {str(e)}")
+            st.info("Please check your CSV file format and try again.")
 
 # Watchlist Recommendations Page
 elif page == "Watchlist Recommendations":

@@ -490,6 +490,162 @@ class PortfolioDatabase:
                         f"{stock['notes'] or ''},{stock['created_at']}")
         
         return "\n".join(lines)
+    
+    def import_watchlist_from_csv(self, csv_data, handle_duplicates='skip', validate_tickers=True):
+        """
+        Import watchlist data from CSV
+        
+        Args:
+            csv_data: CSV file object or string
+            handle_duplicates: How to handle existing tickers ('skip', 'update', 'replace')
+            validate_tickers: Whether to validate ticker symbols with yfinance
+            
+        Returns:
+            dict: Import results with success count, error count, and details
+        """
+        import io
+        import pandas as pd
+        
+        results = {
+            'success_count': 0,
+            'error_count': 0,
+            'errors': [],
+            'warnings': [],
+            'imported_stocks': [],
+            'skipped_stocks': [],
+            'updated_stocks': []
+        }
+        
+        try:
+            # Read CSV data
+            if hasattr(csv_data, 'read'):
+                df = pd.read_csv(csv_data)
+            else:
+                df = pd.read_csv(io.StringIO(csv_data))
+            
+            # Standardize column names (case-insensitive)
+            df.columns = [col.strip().lower() for col in df.columns]
+            
+            # Check required columns
+            if 'ticker' not in df.columns:
+                results['errors'].append("CSV must contain a 'ticker' column")
+                results['error_count'] += 1
+                return results
+            
+            # Get existing watchlist to check for duplicates
+            existing_watchlist = self.get_watchlist()
+            existing_tickers = {stock['ticker'] for stock in existing_watchlist}
+            
+            # Process each row
+            for index, row in df.iterrows():
+                try:
+                    # Extract and validate ticker
+                    ticker = str(row['ticker']).strip().upper()
+                    if not ticker or ticker == 'NAN':
+                        results['errors'].append(f"Row {index + 1}: Missing or invalid ticker")
+                        results['error_count'] += 1
+                        continue
+                    
+                    # Check for duplicates
+                    if ticker in existing_tickers:
+                        if handle_duplicates == 'skip':
+                            results['skipped_stocks'].append(ticker)
+                            results['warnings'].append(f"Row {index + 1}: {ticker} already exists in watchlist (skipped)")
+                            continue
+                        elif handle_duplicates == 'replace':
+                            # Remove existing entry before adding new one
+                            self.remove_from_watchlist(ticker)
+                            existing_tickers.remove(ticker)
+                    
+                    # Validate ticker symbol if requested
+                    if validate_tickers:
+                        try:
+                            import yfinance as yf
+                            stock = yf.Ticker(ticker)
+                            info = stock.info
+                            # Check if we got valid data
+                            if not info or info.get('regularMarketPrice') is None and info.get('currentPrice') is None:
+                                # Try history as fallback
+                                hist = stock.history(period="1d")
+                                if hist.empty:
+                                    results['warnings'].append(f"Row {index + 1}: Could not validate ticker {ticker} (adding anyway)")
+                        except Exception as e:
+                            results['warnings'].append(f"Row {index + 1}: Could not validate ticker {ticker}: {str(e)} (adding anyway)")
+                    
+                    # Extract optional fields
+                    target_buy_price = None
+                    target_sell_price = None
+                    notes = None
+                    status = 'watching'
+                    
+                    # Handle target buy price
+                    if 'target_buy_price' in df.columns and pd.notna(row['target_buy_price']):
+                        try:
+                            target_buy_price = float(row['target_buy_price'])
+                            if target_buy_price <= 0:
+                                target_buy_price = None
+                        except (ValueError, TypeError):
+                            results['warnings'].append(f"Row {index + 1}: Invalid target_buy_price for {ticker}")
+                    
+                    # Handle target sell price
+                    if 'target_sell_price' in df.columns and pd.notna(row['target_sell_price']):
+                        try:
+                            target_sell_price = float(row['target_sell_price'])
+                            if target_sell_price <= 0:
+                                target_sell_price = None
+                        except (ValueError, TypeError):
+                            results['warnings'].append(f"Row {index + 1}: Invalid target_sell_price for {ticker}")
+                    
+                    # Handle notes
+                    if 'notes' in df.columns and pd.notna(row['notes']):
+                        notes = str(row['notes']).strip()
+                        if notes == 'NAN':
+                            notes = None
+                    
+                    # Handle status
+                    if 'status' in df.columns and pd.notna(row['status']):
+                        status = str(row['status']).strip().lower()
+                        valid_statuses = ['watching', 'ready_to_buy', 'ready_to_sell', 'paused']
+                        if status not in valid_statuses:
+                            status = 'watching'
+                            results['warnings'].append(f"Row {index + 1}: Invalid status for {ticker}, using 'watching'")
+                    
+                    # Add to watchlist
+                    if handle_duplicates == 'update' and ticker in existing_tickers:
+                        # Update existing entry
+                        success = self.update_watchlist_stock(
+                            ticker=ticker,
+                            target_buy_price=target_buy_price,
+                            target_sell_price=target_sell_price,
+                            notes=notes,
+                            status=status
+                        )
+                        if success:
+                            results['updated_stocks'].append(ticker)
+                            results['success_count'] += 1
+                        else:
+                            results['errors'].append(f"Row {index + 1}: Failed to update {ticker}")
+                            results['error_count'] += 1
+                    else:
+                        # Add new entry
+                        watchlist_id = self.add_to_watchlist(
+                            ticker=ticker,
+                            target_buy_price=target_buy_price,
+                            target_sell_price=target_sell_price,
+                            notes=notes
+                        )
+                        results['imported_stocks'].append(ticker)
+                        results['success_count'] += 1
+                
+                except Exception as e:
+                    results['errors'].append(f"Row {index + 1}: Error processing {row.get('ticker', 'unknown')}: {str(e)}")
+                    results['error_count'] += 1
+            
+        except Exception as e:
+            results['errors'].append(f"Error reading CSV file: {str(e)}")
+            results['error_count'] += 1
+        
+        return results
 
 # Global database instance
 db = PortfolioDatabase()
