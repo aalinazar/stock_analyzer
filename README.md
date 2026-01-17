@@ -1,6 +1,6 @@
 # 📊 Stock Inventory Tracker with AI Trading Strategies
 
-A powerful Streamlit application for tracking your stock investments with AI-powered trading recommendations and persistent database storage using Yahoo Finance data.
+A powerful Streamlit application for tracking your stock investments with trading recommendations and persistent database storage using Yahoo Finance data.
 
 ## 🚀 New Features
 
@@ -171,7 +171,7 @@ CREATE TABLE trading_recommendations (
 1. **Portfolio Overview**: Main dashboard showing all your stocks
 2. **Add Stock**: Add new stocks to your portfolio
 3. **Trading Strategy**: Configure strategies for individual stocks
-4. **Recommendations**: View AI-powered trading signals
+4. **Recommendations**: View trading signals
 5. **Settings**: Manage data and export options
 
 ### Adding Stocks to Your Portfolio
