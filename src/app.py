@@ -36,8 +36,9 @@ from src.watchlist.pages import (
     watchlist_recommendations_page
 )
 
-# TODO: Import trading and settings pages when created
-# from trading.strategy_config import trading_strategy_page
+# Import trading pages
+from src.trading.pages import trading_strategy_page
+# TODO: Import settings pages when created
 # from settings.pages import settings_page
 
 
@@ -86,9 +87,9 @@ def main():
         elif page == "Watchlist Recommendations":
             watchlist_recommendations_page()
         
-        # Trading Strategy page (placeholder for now)
+        # Trading Strategy page
         elif page == "Trading Strategy":
-            display_alert_box("🚧 Trading Strategy page is being refactored. Please check back later.", "info")
+            trading_strategy_page()
         
         # Settings page (placeholder for now)
         elif page == "Settings":

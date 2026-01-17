@@ -9,3 +9,4 @@ Handles trading-related functionality including:
 
 from .strategy_config import *
 from .recommendations import *
+from .pages import *
