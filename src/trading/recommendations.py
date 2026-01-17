@@ -527,17 +527,32 @@ def display_recommendation_history_table(recent_recs: list):
     if recent_recs:
         df = pd.DataFrame(recent_recs)
         
+        # Handle missing columns for backward compatibility
+        available_columns = df.columns.tolist()
+        
+        # Determine which columns to use
+        price_column = 'price_at_recommendation' if 'price_at_recommendation' in available_columns else 'price'
+        strategy_column = 'strategy' if 'strategy' in available_columns else None
+        
+        # Build column list based on available data
+        columns_to_use = ['ticker', 'action', 'confidence', 'reason', price_column, 'created_at']
+        if strategy_column:
+            columns_to_use.insert(2, strategy_column)  # Insert strategy after action
+        
         # Format for display
-        display_df = df[[
-            'ticker', 'action', 'strategy', 'confidence', 'reason', 'price', 'created_at'
-        ]].copy()
+        display_df = df[columns_to_use].copy()
         
         display_df['created_at'] = pd.to_datetime(display_df['created_at']).dt.strftime('%Y-%m-%d %H:%M')
         display_df['confidence'] = display_df['confidence'].apply(lambda x: f"{x:.1%}")
-        display_df['price'] = display_df['price'].apply(lambda x: f"${x:.2f}")
+        display_df[price_column] = display_df[price_column].apply(lambda x: f"${x:.2f}")
         display_df['reason'] = display_df['reason'].apply(lambda x: x[:80] + "..." if len(x) > 80 else x)
         
-        display_df.columns = ['Ticker', 'Action', 'Strategy', 'Confidence', 'Reason', 'Price', 'Time']
+        # Handle strategy column formatting
+        if strategy_column:
+            display_df[strategy_column] = display_df[strategy_column].fillna('Unknown').apply(lambda x: x.replace('_', ' ').title() if x != 'Unknown' else x)
+            display_df.columns = ['Ticker', 'Action', 'Strategy', 'Confidence', 'Reason', 'Price', 'Time']
+        else:
+            display_df.columns = ['Ticker', 'Action', 'Confidence', 'Reason', 'Price', 'Time']
         
         def color_action(val):
             if val == 'BUY':

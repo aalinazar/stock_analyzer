@@ -48,9 +48,16 @@ class PortfolioDatabase:
                     reason TEXT NOT NULL,
                     confidence REAL NOT NULL, -- 0-1 scale
                     price_at_recommendation REAL NOT NULL,
+                    strategy TEXT, -- Strategy used for recommendation
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            
+            # Add strategy column to existing trading_recommendations table if it doesn't exist
+            cursor.execute("PRAGMA table_info(trading_recommendations)")
+            columns = [column[1] for column in cursor.fetchall()]
+            if 'strategy' not in columns:
+                cursor.execute('ALTER TABLE trading_recommendations ADD COLUMN strategy TEXT')
             
             # Sales transactions table
             cursor.execute('''
@@ -205,15 +212,15 @@ class PortfolioDatabase:
             return None
     
     def log_recommendation(self, ticker: str, action: str, reason: str, 
-                          confidence: float, price: float) -> int:
+                          confidence: float, price: float, strategy: str = None) -> int:
         """Log a trading recommendation"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO trading_recommendations 
-                (ticker, action, reason, confidence, price_at_recommendation)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (ticker.upper(), action, reason, confidence, price))
+                (ticker, action, reason, confidence, price_at_recommendation, strategy)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (ticker.upper(), action, reason, confidence, price, strategy))
             
             rec_id = cursor.lastrowid
             conn.commit()

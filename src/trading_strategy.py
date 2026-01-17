@@ -45,7 +45,8 @@ class TradingStrategy:
             action=recommendation['action'],
             reason=recommendation['reason'],
             confidence=recommendation['confidence'],
-            price=current_price
+            price=current_price,
+            strategy=recommendation['strategy']
         )
         
         return recommendation
