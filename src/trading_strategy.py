@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
-from database import db
+from src.database import db
 
 class TradingStrategy:
     def __init__(self):
